@@ -1,27 +1,41 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   CircleMarker,
   MapContainer,
+  Polygon,
+  Polyline,
   Popup,
   Rectangle,
   TileLayer,
   useMap,
+  useMapEvents,
 } from 'react-leaflet'
 import type { LatLngBoundsExpression } from 'leaflet'
 import {
+  Check,
   Crosshair,
+  Download,
   Flame,
+  Layers,
   MapPin,
   Maximize2,
+  Pencil,
   RotateCcw,
   Satellite,
   ShieldAlert,
+  Trash2,
+  Upload,
+  X,
   Zap,
 } from 'lucide-react'
 import { useFireData } from '@/context/FireDataContext'
 import { FilterBar } from '@/components/shared/FilterBar'
 import { Badge, Card, EmptyState, PageHeader } from '@/components/ui'
 import { REGIONS, REGIONAL_BOUNDS_DISCLAIMER } from '@/data/regions'
+import {
+  exportCustomAoiGeoJson,
+  exportObservationsGeoJson,
+} from '@/utils/exportUtils'
 
 // Center coordinate for India
 const INDIA_CENTER: [number, number] = [17.5, 78.5]
@@ -56,6 +70,24 @@ function MapViewController({
   return null
 }
 
+// Map event listener for drawing custom AOI points
+function DrawingMapEvents({
+  isDrawing,
+  onAddPoint,
+}: {
+  isDrawing: boolean
+  onAddPoint: (pt: [number, number]) => void
+}) {
+  useMapEvents({
+    click(e) {
+      if (isDrawing) {
+        onAddPoint([e.latlng.lat, e.latlng.lng])
+      }
+    },
+  })
+  return null
+}
+
 export default function FireExplorerPage() {
   const {
     filteredObservations,
@@ -65,12 +97,20 @@ export default function FireExplorerPage() {
     setSelectedObservationId,
     filter,
     metadata,
+    customAoi,
+    setCustomAoi,
+    clearCustomAoi,
   } = useFireData()
 
   const [resetTrigger, setResetTrigger] = useState(0)
   const [fitBounds, setFitBounds] = useState<LatLngBoundsExpression | null>(null)
   const [showRegionBounds, setShowRegionBounds] = useState(true)
   const [darkBasemap, setDarkBasemap] = useState(true)
+
+  // Custom AOI drawing state
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [drawnPoints, setDrawnPoints] = useState<Array<[number, number]>>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Active region bounding box
   const activeRegionDef = useMemo(() => {
@@ -105,6 +145,100 @@ export default function FireExplorerPage() {
     setResetTrigger((t) => t + 1)
   }
 
+  const handleAddDrawingPoint = (pt: [number, number]) => {
+    setDrawnPoints((prev) => [...prev, pt])
+  }
+
+  const handleFinishAoi = () => {
+    if (drawnPoints.length < 3) return
+
+    let minLat = 90
+    let maxLat = -90
+    let minLng = 180
+    let maxLng = -180
+
+    for (const [lat, lng] of drawnPoints) {
+      if (lat < minLat) minLat = lat
+      if (lat > maxLat) maxLat = lat
+      if (lng < minLng) minLng = lng
+      if (lng > maxLng) maxLng = lng
+    }
+
+    setCustomAoi({
+      name: `Custom Polygon AOI (${drawnPoints.length} vertices)`,
+      points: drawnPoints,
+      bounds: { minLat, maxLat, minLng, maxLng },
+      createdAt: new Date().toISOString(),
+    })
+
+    setIsDrawing(false)
+    setDrawnPoints([])
+  }
+
+  const handleCancelDrawing = () => {
+    setIsDrawing(false)
+    setDrawnPoints([])
+  }
+
+  const handleGeoJsonUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string)
+        let coords: [number, number][] = []
+
+        if (parsed.type === 'Feature' && parsed.geometry?.type === 'Polygon') {
+          coords = parsed.geometry.coordinates[0].map(
+            ([lng, lat]: [number, number]) => [lat, lng],
+          )
+        } else if (parsed.type === 'Polygon') {
+          coords = parsed.coordinates[0].map(
+            ([lng, lat]: [number, number]) => [lat, lng],
+          )
+        } else if (
+          parsed.type === 'FeatureCollection' &&
+          parsed.features?.[0]?.geometry?.type === 'Polygon'
+        ) {
+          coords = parsed.features[0].geometry.coordinates[0].map(
+            ([lng, lat]: [number, number]) => [lat, lng],
+          )
+        }
+
+        if (coords.length < 3) {
+          alert('Could not find a valid Polygon with at least 3 vertices in this GeoJSON file.')
+          return
+        }
+
+        let minLat = 90
+        let maxLat = -90
+        let minLng = 180
+        let maxLng = -180
+
+        for (const [lat, lng] of coords) {
+          if (lat < minLat) minLat = lat
+          if (lat > maxLat) maxLat = lat
+          if (lng < minLng) minLng = lng
+          if (lng > maxLng) maxLng = lng
+        }
+
+        setCustomAoi({
+          name: file.name.replace(/\.[^/.]+$/, ''),
+          points: coords,
+          bounds: { minLat, maxLat, minLng, maxLng },
+          createdAt: new Date().toISOString(),
+        })
+      } catch {
+        alert('Failed to parse GeoJSON file. Please verify valid GeoJSON format.')
+      }
+    }
+    reader.readAsText(file)
+    // Reset file input so user can re-upload same file if desired
+    e.target.value = ''
+  }
+
   // Cap markers rendered on map for smooth 60fps performance if thousands exist
   const mapObservations = useMemo(() => {
     if (filteredObservations.length <= 1500) return filteredObservations
@@ -123,7 +257,7 @@ export default function FireExplorerPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Interactive Fire Explorer"
-        description="Geographic map visualization of NASA MODIS and VIIRS active-fire hotspot detections across India."
+        description="Geographic map visualization of NASA MODIS and VIIRS active-fire hotspot detections across India with custom Area of Interest (AOI) polygon filtering."
         meta={
           <Badge tone="ember" dot>
             OpenStreetMap Engine
@@ -169,7 +303,80 @@ export default function FireExplorerPage() {
         </div>
 
         {/* Map action buttons */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Custom AOI Drawing Trigger */}
+          {!isDrawing ? (
+            <button
+              type="button"
+              onClick={() => setIsDrawing(true)}
+              className="inline-flex items-center gap-1 rounded-lg border border-signal-400/50 bg-signal-400/10 px-2.5 py-1 font-medium text-signal-300 hover:bg-signal-400/20 transition-colors"
+              title="Click on map to draw a custom polygon Area of Interest"
+            >
+              <Pencil className="size-3" />
+              <span>Draw AOI</span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={handleFinishAoi}
+                disabled={drawnPoints.length < 3}
+                className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/50 bg-emerald-500/20 px-2.5 py-1 font-medium text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40 transition-colors"
+                title="Complete polygon and apply spatial filter"
+              >
+                <Check className="size-3" />
+                <span>Finish AOI ({drawnPoints.length} pts)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrawnPoints([])}
+                disabled={drawnPoints.length === 0}
+                className="inline-flex items-center gap-1 rounded-lg border border-line bg-ink-800 px-2 py-1 text-fg-muted hover:text-fg disabled:opacity-40"
+                title="Clear current drawing points"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelDrawing}
+                className="inline-flex items-center gap-1 rounded-lg border border-line bg-ink-800 px-2 py-1 text-fg-muted hover:text-fg"
+                title="Cancel drawing mode"
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          )}
+
+          {/* GeoJSON Upload */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".geojson,.json"
+            onChange={handleGeoJsonUpload}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="inline-flex items-center gap-1 rounded-lg border border-line bg-ink-800 px-2.5 py-1 text-fg-muted hover:bg-ink-700 hover:text-fg transition-colors"
+            title="Import custom polygon geometry from GeoJSON file"
+          >
+            <Upload className="size-3" />
+            <span>GeoJSON AOI</span>
+          </button>
+
+          {/* GeoJSON Hotspots Export */}
+          <button
+            type="button"
+            onClick={() => exportObservationsGeoJson(filteredObservations)}
+            disabled={filteredObservations.length === 0}
+            className="inline-flex items-center gap-1 rounded-lg border border-line bg-ink-800 px-2.5 py-1 text-fg-muted hover:bg-ink-700 hover:text-fg disabled:opacity-40 transition-colors"
+            title="Export filtered hotspots as GeoJSON FeatureCollection"
+          >
+            <Download className="size-3" />
+            <span>GeoJSON</span>
+          </button>
+
           <button
             type="button"
             onClick={() => setShowRegionBounds((s) => !s)}
@@ -189,7 +396,7 @@ export default function FireExplorerPage() {
             className="rounded-lg border border-line bg-ink-800 px-2.5 py-1 text-fg-muted hover:bg-ink-700 hover:text-fg transition-colors"
             title="Toggle Dark Map Filter"
           >
-            {darkBasemap ? 'Dark Tiles' : 'Light Tiles'}
+            {darkBasemap ? 'Dark' : 'Light'}
           </button>
 
           <button
@@ -210,17 +417,70 @@ export default function FireExplorerPage() {
             title="Reset map view to India center"
           >
             <RotateCcw className="size-3 text-signal-400" />
-            <span>Reset View</span>
+            <span>Reset</span>
           </button>
         </div>
       </div>
+
+      {/* Active Custom AOI Notification Banner */}
+      {customAoi && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-signal-400/30 bg-signal-950/40 px-4 py-2.5 text-xs text-signal-300">
+          <div className="flex items-center gap-2">
+            <Layers className="size-4 text-signal-400 shrink-0" />
+            <div>
+              <span className="font-semibold text-fg">Active Custom AOI:</span>{' '}
+              <span>{customAoi.name}</span>
+              <span className="text-fg-faint ml-2 text-[11px]">
+                ({customAoi.points.length} vertices, filtering {filteredObservations.length} hotspots)
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => exportCustomAoiGeoJson(customAoi)}
+              className="inline-flex items-center gap-1 rounded border border-signal-400/40 bg-signal-400/10 px-2 py-0.5 text-[11px] font-medium text-signal-200 hover:bg-signal-400/20"
+              title="Download custom AOI boundary polygon as GeoJSON"
+            >
+              <Download className="size-3" />
+              <span>Export AOI GeoJSON</span>
+            </button>
+            <button
+              type="button"
+              onClick={clearCustomAoi}
+              className="inline-flex items-center gap-1 rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-300 hover:bg-red-500/20"
+              title="Remove custom spatial boundary filter"
+            >
+              <Trash2 className="size-3" />
+              <span>Clear AOI</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Drawing Instructions Banner */}
+      {isDrawing && (
+        <div className="rounded-xl border border-ember-500/40 bg-ember-950/40 px-4 py-2.5 text-xs text-ember-300 flex items-center justify-between">
+          <span>
+            <strong>AOI Drawing Mode Active:</strong> Click on the map to place polygon vertices. Need at least 3 points. Current: {drawnPoints.length} points.
+          </span>
+          <button
+            type="button"
+            onClick={handleFinishAoi}
+            disabled={drawnPoints.length < 3}
+            className="rounded bg-ember-500 px-2 py-1 font-semibold text-ink-950 hover:bg-ember-400 disabled:opacity-40"
+          >
+            Apply AOI
+          </button>
+        </div>
+      )}
 
       {/* Main Explorer Two-Column Grid: Map + Details Panel */}
       <div className="grid gap-6 lg:grid-cols-12 items-start">
         {/* Map Container (8 cols) */}
         <div className="lg:col-span-8 flex flex-col gap-2">
           <div className="relative h-[550px] w-full overflow-hidden rounded-xl border border-line bg-ink-950 shadow-panel">
-            {filteredObservations.length === 0 ? (
+            {filteredObservations.length === 0 && !customAoi && !isDrawing ? (
               <div className="flex h-full items-center justify-center p-6">
                 <EmptyState
                   icon={Flame}
@@ -237,6 +497,10 @@ export default function FireExplorerPage() {
                 style={{ height: '100%', width: '100%', background: '#0a0b0d' }}
               >
                 <MapViewController bounds={fitBounds} resetTrigger={resetTrigger} />
+                <DrawingMapEvents
+                  isDrawing={isDrawing}
+                  onAddPoint={handleAddDrawingPoint}
+                />
 
                 {/* OpenStreetMap Tile Layer with mandatory attribution */}
                 <TileLayer
@@ -260,6 +524,47 @@ export default function FireExplorerPage() {
                       fillOpacity: 0.05,
                     }}
                   />
+                )}
+
+                {/* Active Custom AOI Boundary */}
+                {customAoi && customAoi.points.length >= 3 && (
+                  <Polygon
+                    positions={customAoi.points}
+                    pathOptions={{
+                      color: '#38bdf8',
+                      weight: 2,
+                      dashArray: '5, 5',
+                      fillColor: '#0284c7',
+                      fillOpacity: 0.15,
+                    }}
+                  />
+                )}
+
+                {/* In-progress drawing points & polyline */}
+                {isDrawing && drawnPoints.length > 0 && (
+                  <>
+                    <Polyline
+                      positions={drawnPoints}
+                      pathOptions={{
+                        color: '#ff8a1f',
+                        weight: 2,
+                        dashArray: '3, 3',
+                      }}
+                    />
+                    {drawnPoints.map(([lat, lng], idx) => (
+                      <CircleMarker
+                        key={`draw-${idx}-${lat}-${lng}`}
+                        center={[lat, lng]}
+                        radius={5}
+                        pathOptions={{
+                          color: '#ffffff',
+                          weight: 2,
+                          fillColor: '#ff8a1f',
+                          fillOpacity: 1,
+                        }}
+                      />
+                    ))}
+                  </>
                 )}
 
                 {/* Hotspot Markers */}

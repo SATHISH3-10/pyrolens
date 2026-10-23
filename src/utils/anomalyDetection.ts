@@ -1,19 +1,36 @@
-import type { AnomalyRecord, AnomalyReport, FireObservation } from '@/types/fire'
+import type { AnomalyRecord, AnomalyReport, FireObservation, PrimaryMetricType } from '@/types/fire'
 import { aggregateByDate } from './aggregation'
 
 export const ANOMALY_SCIENTIFIC_DISCLAIMER =
-  'STATISTICAL NOTICE: Flagged periods represent statistical observation anomalies in satellite-detected thermal anomalies relative to the baseline. They do NOT represent confirmed wildfires, fire perimeters, ignition causes, or predictive fire-risk forecasts.'
+  'STATISTICAL NOTICE: Flagged periods represent statistical observation surges in satellite-detected thermal radiance relative to the reference baseline. They do NOT represent confirmed wildfire perimeters, fire-spread predictions, or emergency response directives.'
 
 export const MIN_OBSERVATION_DAYS_REQUIRED = 10
 
+export interface AnomalyDetectionOptions {
+  thresholdMultiplier?: number // 2.0 (Sensitive), 2.5 (Standard), 3.0 (Extreme)
+  metricType?: PrimaryMetricType // 'harmonized' (recommended) | 'modis' | 'viirs' | 'raw_total'
+  referenceRecords?: readonly FireObservation[] // Historical reference baseline period
+  baselinePeriodLabel?: string
+}
+
 /**
- * Robust statistical anomaly detection using Median and Median Absolute Deviation (MAD).
- * MAD is resilient to extreme outliers compared to standard deviation.
+ * Robust non-parametric statistical anomaly detection using Median and Median Absolute Deviation (MAD).
+ * Unlike standard deviation (mean ± k*sigma), MAD is resilient against extreme wildfire outliers
+ * which would otherwise artificially inflate the mean and mask genuine surges.
  */
 export function detectUnusualActivity(
   records: readonly FireObservation[],
-  thresholdMultiplier = 2.5,
+  options: number | AnomalyDetectionOptions = 2.5,
 ): AnomalyReport {
+  // Support both legacy number argument and new options object
+  const opts: AnomalyDetectionOptions =
+    typeof options === 'number' ? { thresholdMultiplier: options } : options
+
+  const thresholdMultiplier = opts.thresholdMultiplier ?? 2.5
+  const metricType = opts.metricType ?? 'harmonized'
+  const referenceRecords = opts.referenceRecords ?? records
+  const baselineLabel = opts.baselinePeriodLabel ?? 'Active Window Baseline'
+
   if (records.length === 0) {
     return {
       status: 'no_data',
@@ -28,10 +45,9 @@ export function detectUnusualActivity(
     }
   }
 
-  const dailyAggs = aggregateByDate(records)
-  const totalDays = dailyAggs.length
-
-  if (totalDays < MIN_OBSERVATION_DAYS_REQUIRED) {
+  // 1. Compute reference daily metrics
+  const refDailyAggs = aggregateByDate(referenceRecords)
+  if (refDailyAggs.length < MIN_OBSERVATION_DAYS_REQUIRED) {
     return {
       status: 'insufficient_baseline',
       baselineMethod: 'Median Absolute Deviation (MAD)',
@@ -39,25 +55,34 @@ export function detectUnusualActivity(
       madValue: 0,
       thresholdMultiplier,
       thresholdValue: 0,
-      totalDaysAnalyzed: totalDays,
+      totalDaysAnalyzed: refDailyAggs.length,
       anomalies: [],
       disclaimer: ANOMALY_SCIENTIFIC_DISCLAIMER,
     }
   }
 
-  // Extract daily counts
-  const counts = dailyAggs.map((d) => d.total).sort((a, b) => a - b)
+  // Extract reference values based on selected metricType
+  const getVal = (d: (typeof refDailyAggs)[0]) =>
+    metricType === 'harmonized'
+      ? d.harmonizedActiveCells
+      : metricType === 'modis'
+      ? d.modis
+      : metricType === 'viirs'
+      ? d.viirs
+      : d.total
 
-  // Calculate Median
-  const mid = Math.floor(counts.length / 2)
+  const refValues = refDailyAggs.map(getVal).sort((a, b) => a - b)
+
+  // 2. Calculate Median
+  const mid = Math.floor(refValues.length / 2)
   const baselineMedian =
-    counts.length % 2 !== 0
-      ? counts[mid]!
-      : Number(((counts[mid - 1]! + counts[mid]!) / 2).toFixed(1))
+    refValues.length % 2 !== 0
+      ? refValues[mid]!
+      : Number(((refValues[mid - 1]! + refValues[mid]!) / 2).toFixed(1))
 
-  // Calculate Absolute Deviations from Median
-  const deviations = counts
-    .map((c) => Math.abs(c - baselineMedian))
+  // 3. Calculate Absolute Deviations from Median
+  const deviations = refValues
+    .map((v) => Math.abs(v - baselineMedian))
     .sort((a, b) => a - b)
 
   const devMid = Math.floor(deviations.length / 2)
@@ -66,31 +91,45 @@ export function detectUnusualActivity(
       ? deviations[devMid]!
       : Number(((deviations[devMid - 1]! + deviations[devMid]!) / 2).toFixed(1))
 
-  // Normal scale factor for MAD is ~1.4826
-  // Ensure non-zero divisor
+  // Normal scale factor for asymptotic normal consistency: 1.4826
+  // Ensure non-zero divisor to prevent infinite score on quiet days
   const effectiveMad = Math.max(rawMad * 1.4826, 1.5)
 
-  // Threshold: Median + (multiplier * effectiveMad)
+  // Cutoff threshold: Median + (multiplier * effectiveMad)
   const thresholdValue = Number((baselineMedian + thresholdMultiplier * effectiveMad).toFixed(1))
 
+  // 4. Evaluate target observation days against the reference threshold
+  const targetDailyAggs = aggregateByDate(records)
   const anomalies: AnomalyRecord[] = []
 
-  for (const day of dailyAggs) {
-    if (day.total > thresholdValue) {
-      const score = Number(((day.total - baselineMedian) / effectiveMad).toFixed(2))
+  const metricUnit =
+    metricType === 'harmonized'
+      ? 'active grid cells'
+      : metricType === 'modis'
+      ? 'MODIS hotspots'
+      : metricType === 'viirs'
+      ? 'VIIRS hotspots'
+      : 'raw hotspots'
 
+  for (const day of targetDailyAggs) {
+    const observed = getVal(day)
+
+    if (observed > thresholdValue) {
+      const score = Number(((observed - baselineMedian) / effectiveMad).toFixed(2))
+
+      // Severity classification based on statistical distance from normal distribution
       let severity: 'moderate' | 'high' | 'extreme' = 'moderate'
       if (score >= 4.0) severity = 'extreme'
       else if (score >= 3.0) severity = 'high'
 
       const ratio =
-        baselineMedian > 0 ? (day.total / baselineMedian).toFixed(1) : 'N/A'
+        baselineMedian > 0 ? (observed / baselineMedian).toFixed(1) : 'N/A'
 
-      const explanation = `On ${day.date}, ${day.total} hotspots were detected (${ratio}x baseline median of ${baselineMedian} hotspots). This exceeds the statistical threshold of ${thresholdValue} (Score: +${score}).`
+      const explanation = `On ${day.date}, ${observed} ${metricUnit} were detected (${ratio}x the ${baselineLabel} median of ${baselineMedian}). This exceeds the statistical surge threshold of ${thresholdValue} (Anomaly Score: +${score} MAD). Sensor breakdown: ${day.modis} MODIS, ${day.viirs} VIIRS.`
 
       anomalies.push({
         date: day.date,
-        observedCount: day.total,
+        observedCount: observed,
         baselineValue: baselineMedian,
         thresholdValue,
         anomalyScore: score,
@@ -110,7 +149,7 @@ export function detectUnusualActivity(
     madValue: Number(rawMad.toFixed(1)),
     thresholdMultiplier,
     thresholdValue,
-    totalDaysAnalyzed: totalDays,
+    totalDaysAnalyzed: targetDailyAggs.length,
     anomalies,
     disclaimer: ANOMALY_SCIENTIFIC_DISCLAIMER,
   }

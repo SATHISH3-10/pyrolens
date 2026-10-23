@@ -3,7 +3,11 @@ import type {
   FireObservation,
   HarmonizationMetrics,
   MonthAggregate,
+  MultiYearComparisonRecord,
+  MultiYearDayData,
+  MultiYearMonthData,
   ObservationFilter,
+  PrimaryMetricType,
   RegionAggregate,
   SpatialGridCell,
   SummaryMetrics,
@@ -11,15 +15,47 @@ import type {
 import { getRegionById, REGIONS } from '@/data/regions'
 
 /**
- * Filter observations by sensor, date range, region, and optional criteria.
+ * Standard spatial grid snapping key.
+ * Formats coordinates into consistent string hashes for cell identification.
+ */
+export function getGridCellKey(lat: number, lng: number, cellSizeDegrees = 0.25): string {
+  const gridLat = Math.floor(lat / cellSizeDegrees) * cellSizeDegrees
+  const gridLng = Math.floor(lng / cellSizeDegrees) * cellSizeDegrees
+  return `cell_${gridLat.toFixed(3)}_${gridLng.toFixed(3)}`
+}
+
+/**
+ * Ray-casting algorithm (Jordan Curve Theorem) to determine if a point is inside a polygon.
+ * Points array is expected in [latitude, longitude] format.
+ */
+export function isPointInPolygon(
+  lat: number,
+  lng: number,
+  polygon: readonly [number, number][],
+): boolean {
+  if (!polygon || polygon.length < 3) return false
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i]!
+    const [xj, yj] = polygon[j]!
+    const intersect =
+      yi > lng !== yj > lng && lat < ((xj - xi) * (lng - yi)) / (yj - yi) + xi
+    if (intersect) inside = !inside
+  }
+  return inside
+}
+
+/**
+ * Filter observations by sensor, date range, region, custom polygon, and optional criteria.
  */
 export function filterObservations(
   records: readonly FireObservation[],
   filter: ObservationFilter,
 ): FireObservation[] {
-  const { sensor, startDate, endDate, regionId, daynight, minFrp } = filter
+  const { sensor, startDate, endDate, regionId, customPolygon, customAoi, daynight, minFrp } = filter
 
-  const targetRegion = regionId !== 'all' ? getRegionById(regionId) : undefined
+  const targetRegion = regionId !== 'all' && regionId !== 'custom' ? getRegionById(regionId) : undefined
+  const activePolygon = customAoi?.points ?? customPolygon
 
   return records.filter((obs) => {
     // 1. Sensor check
@@ -35,8 +71,13 @@ export function filterObservations(
       return false
     }
 
-    // 3. Region check
-    if (regionId && regionId !== 'all') {
+    // 3. Custom Polygon AOI check (supports customAoi and customPolygon)
+    if (activePolygon && activePolygon.length >= 3) {
+      if (!isPointInPolygon(obs.latitude, obs.longitude, activePolygon)) {
+        return false
+      }
+    } else if (regionId && regionId !== 'all' && regionId !== 'custom') {
+      // 4. Predefined Region bounds check
       if (targetRegion) {
         const { minLat, maxLat, minLng, maxLng } = targetRegion.bounds
         if (
@@ -52,12 +93,12 @@ export function filterObservations(
       }
     }
 
-    // 4. Day / Night check
+    // 5. Day / Night check
     if (daynight && daynight !== 'ALL' && obs.daynight !== daynight) {
       return false
     }
 
-    // 5. Min FRP check
+    // 6. Min FRP check
     if (minFrp !== undefined && minFrp > 0) {
       if (obs.frp === null || obs.frp < minFrp) {
         return false
@@ -70,9 +111,12 @@ export function filterObservations(
 
 /**
  * Calculate summary metrics from an observation subset.
- * Ensures zero hardcoded numbers and safe handling of null FRPs.
+ * Safely computes distinct active spatial grid cells (0.25°) and handles null FRPs cleanly.
  */
-export function calculateSummaryMetrics(records: readonly FireObservation[]): SummaryMetrics {
+export function calculateSummaryMetrics(
+  records: readonly FireObservation[],
+  gridResolution = 0.25,
+): SummaryMetrics {
   let modisCount = 0
   let viirsCount = 0
   let dayCount = 0
@@ -90,9 +134,11 @@ export function calculateSummaryMetrics(records: readonly FireObservation[]): Su
   let viirsValidFrpCount = 0
 
   const datesSet = new Set<string>()
+  const gridCellsSet = new Set<string>()
 
   for (const obs of records) {
     datesSet.add(obs.acqDate)
+    gridCellsSet.add(getGridCellKey(obs.latitude, obs.longitude, gridResolution))
 
     if (obs.instrument === 'MODIS') {
       modisCount++
@@ -128,6 +174,7 @@ export function calculateSummaryMetrics(records: readonly FireObservation[]): Su
     totalCount: records.length,
     modisCount,
     viirsCount,
+    harmonizedActiveCells: gridCellsSet.size,
     distinctDatesCount: datesSet.size,
     avgFrp: validFrpCount > 0 ? Number((frpSum / validFrpCount).toFixed(1)) : null,
     validFrpCount,
@@ -147,9 +194,12 @@ export function calculateSummaryMetrics(records: readonly FireObservation[]): Su
 }
 
 /**
- * Aggregate observations by calendar date.
+ * Aggregate observations by calendar date, calculating both raw counts and harmonized active cells.
  */
-export function aggregateByDate(records: readonly FireObservation[]): DateAggregate[] {
+export function aggregateByDate(
+  records: readonly FireObservation[],
+  gridResolution = 0.25,
+): DateAggregate[] {
   const map = new Map<
     string,
     {
@@ -162,6 +212,7 @@ export function aggregateByDate(records: readonly FireObservation[]): DateAggreg
       modisValidFrpCount: number
       viirsFrpSum: number
       viirsValidFrpCount: number
+      activeCells: Set<string>
     }
   >()
 
@@ -178,11 +229,14 @@ export function aggregateByDate(records: readonly FireObservation[]): DateAggreg
         modisValidFrpCount: 0,
         viirsFrpSum: 0,
         viirsValidFrpCount: 0,
+        activeCells: new Set<string>(),
       }
       map.set(obs.acqDate, entry)
     }
 
     entry.total++
+    entry.activeCells.add(getGridCellKey(obs.latitude, obs.longitude, gridResolution))
+
     if (obs.instrument === 'MODIS') {
       entry.modis++
       if (obs.frp !== null && !isNaN(obs.frp)) {
@@ -211,6 +265,7 @@ export function aggregateByDate(records: readonly FireObservation[]): DateAggreg
     result.push({
       date,
       total: d.total,
+      harmonizedActiveCells: d.activeCells.size,
       modis: d.modis,
       viirs: d.viirs,
       avgFrp: d.validFrpCount > 0 ? Number((d.frpSum / d.validFrpCount).toFixed(1)) : null,
@@ -240,9 +295,12 @@ const MONTH_NAMES = [
 ]
 
 /**
- * Aggregate observations by month.
+ * Aggregate observations by month with harmonized active cell counts.
  */
-export function aggregateByMonth(records: readonly FireObservation[]): MonthAggregate[] {
+export function aggregateByMonth(
+  records: readonly FireObservation[],
+  gridResolution = 0.25,
+): MonthAggregate[] {
   const map = new Map<
     string,
     {
@@ -251,6 +309,7 @@ export function aggregateByMonth(records: readonly FireObservation[]): MonthAggr
       viirs: number
       frpSum: number
       validFrpCount: number
+      activeCells: Set<string>
     }
   >()
 
@@ -258,11 +317,19 @@ export function aggregateByMonth(records: readonly FireObservation[]): MonthAggr
     const monthKey = obs.acqDate.slice(0, 7) // YYYY-MM
     let entry = map.get(monthKey)
     if (!entry) {
-      entry = { total: 0, modis: 0, viirs: 0, frpSum: 0, validFrpCount: 0 }
+      entry = {
+        total: 0,
+        modis: 0,
+        viirs: 0,
+        frpSum: 0,
+        validFrpCount: 0,
+        activeCells: new Set<string>(),
+      }
       map.set(monthKey, entry)
     }
 
     entry.total++
+    entry.activeCells.add(getGridCellKey(obs.latitude, obs.longitude, gridResolution))
     if (obs.instrument === 'MODIS') entry.modis++
     else entry.viirs++
 
@@ -288,6 +355,7 @@ export function aggregateByMonth(records: readonly FireObservation[]): MonthAggr
       monthNumber: monthNum,
       year,
       total: d.total,
+      harmonizedActiveCells: d.activeCells.size,
       modis: d.modis,
       viirs: d.viirs,
       avgFrp: d.validFrpCount > 0 ? Number((d.frpSum / d.validFrpCount).toFixed(1)) : null,
@@ -298,9 +366,117 @@ export function aggregateByMonth(records: readonly FireObservation[]): MonthAggr
 }
 
 /**
- * Aggregate observations by predefined regional envelopes.
+ * Aggregate multi-year historical comparison for a target month (1–12).
+ * Allows year-over-year comparative analysis (e.g., March 2020 vs March 2021..2026).
  */
-export function aggregateByRegion(records: readonly FireObservation[]): RegionAggregate[] {
+export function aggregateMultiYearComparison(
+  records: readonly FireObservation[],
+  targetMonth: number,
+  gridResolution = 0.25,
+): MultiYearComparisonRecord[] {
+  // 1. Group records by year for the specified month
+  const yearMap = new Map<number, FireObservation[]>()
+
+  for (const obs of records) {
+    const parts = obs.acqDate.split('-')
+    const year = parseInt(parts[0] ?? '0', 10)
+    const month = parseInt(parts[1] ?? '0', 10)
+
+    if (month === targetMonth && year > 1999) {
+      let list = yearMap.get(year)
+      if (!list) {
+        list = []
+        yearMap.set(year, list)
+      }
+      list.push(obs)
+    }
+  }
+
+  const result: MultiYearComparisonRecord[] = []
+  const sortedYears = Array.from(yearMap.keys()).sort((a, b) => a - b)
+
+  for (const yr of sortedYears) {
+    const yrRecords = yearMap.get(yr)!
+    const daysInMonth = new Date(yr, targetMonth, 0).getDate()
+    const dayMap = new Map<number, { obsList: FireObservation[]; cells: Set<string> }>()
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      dayMap.set(d, { obsList: [], cells: new Set() })
+    }
+
+    let activeDaysCount = 0
+    let peakDay = { date: '', value: 0 }
+    const totalYearCells = new Set<string>()
+
+    for (const obs of yrRecords) {
+      const dayNum = parseInt(obs.acqDate.split('-')[2] ?? '0', 10)
+      const entry = dayMap.get(dayNum)
+      if (entry) {
+        entry.obsList.push(obs)
+        const cellKey = getGridCellKey(obs.latitude, obs.longitude, gridResolution)
+        entry.cells.add(cellKey)
+        totalYearCells.add(cellKey)
+      }
+    }
+
+    const days = []
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = `${yr}-${String(targetMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+      const entry = dayMap.get(d)!
+      const count = entry.obsList.length
+      const cellsCount = entry.cells.size
+
+      if (count > 0) activeDaysCount++
+      if (cellsCount > peakDay.value) {
+        peakDay = { date: dateStr, value: cellsCount }
+      }
+
+      let frpSum = 0
+      let validFrp = 0
+      let modis = 0
+      let viirs = 0
+
+      for (const o of entry.obsList) {
+        if (o.instrument === 'MODIS') modis++
+        else viirs++
+        if (o.frp !== null && !isNaN(o.frp)) {
+          frpSum += o.frp
+          validFrp++
+        }
+      }
+
+      days.push({
+        date: dateStr,
+        day: d,
+        rawTotal: count,
+        modisCount: modis,
+        viirsCount: viirs,
+        harmonizedActiveCells: cellsCount,
+        avgFrp: validFrp > 0 ? Number((frpSum / validFrp).toFixed(1)) : null,
+      })
+    }
+
+    result.push({
+      year: yr,
+      month: targetMonth,
+      days,
+      totalRawCount: yrRecords.length,
+      harmonizedActiveCellsTotal: totalYearCells.size,
+      activeDaysCount,
+      peakDay,
+    })
+  }
+
+  return result
+}
+
+/**
+ * Aggregate observations by predefined regional envelopes with harmonized cell counts.
+ */
+export function aggregateByRegion(
+  records: readonly FireObservation[],
+  gridResolution = 0.25,
+): RegionAggregate[] {
   const regionsToCount = REGIONS.filter((r) => r.id !== 'all')
   const map = new Map<
     string,
@@ -311,6 +487,7 @@ export function aggregateByRegion(records: readonly FireObservation[]): RegionAg
       viirs: number
       frpSum: number
       validFrpCount: number
+      activeCells: Set<string>
     }
   >()
 
@@ -322,6 +499,7 @@ export function aggregateByRegion(records: readonly FireObservation[]): RegionAg
       viirs: 0,
       frpSum: 0,
       validFrpCount: 0,
+      activeCells: new Set<string>(),
     })
   }
   map.set('other_india', {
@@ -331,12 +509,14 @@ export function aggregateByRegion(records: readonly FireObservation[]): RegionAg
     viirs: 0,
     frpSum: 0,
     validFrpCount: 0,
+    activeCells: new Set<string>(),
   })
 
   for (const obs of records) {
     const regId = map.has(obs.regionId) ? obs.regionId : 'other_india'
     const entry = map.get(regId)!
     entry.total++
+    entry.activeCells.add(getGridCellKey(obs.latitude, obs.longitude, gridResolution))
     if (obs.instrument === 'MODIS') entry.modis++
     else entry.viirs++
 
@@ -352,14 +532,15 @@ export function aggregateByRegion(records: readonly FireObservation[]): RegionAg
       regionId: id,
       regionName: data.name,
       total: data.total,
+      harmonizedActiveCells: data.activeCells.size,
       modis: data.modis,
       viirs: data.viirs,
       avgFrp: data.validFrpCount > 0 ? Number((data.frpSum / data.validFrpCount).toFixed(1)) : null,
     })
   }
 
-  // Sort descending by total observations
-  return result.sort((a, b) => b.total - a.total)
+  // Sort descending by harmonized active cells (or total)
+  return result.sort((a, b) => b.harmonizedActiveCells - a.harmonizedActiveCells)
 }
 
 /**
@@ -513,3 +694,212 @@ export function aggregateSpatialGrid(
     metrics,
   }
 }
+
+/**
+ * Safe metric value extractor based on active user-selected PrimaryMetricType.
+ */
+export function getMetricValue(
+  agg: DateAggregate | MonthAggregate,
+  metricType: PrimaryMetricType,
+): number {
+  switch (metricType) {
+    case 'harmonized':
+      return agg.harmonizedActiveCells
+    case 'modis':
+      return agg.modis
+    case 'viirs':
+      return agg.viirs
+    case 'frp':
+      return agg.avgFrp ?? 0
+    case 'raw_total':
+    default:
+      return agg.total
+  }
+}
+
+/**
+ * Aggregates a given month (1..12) across multiple years (e.g. 2020-2026)
+ * for year-over-year comparative analysis.
+ */
+export function aggregateMultiYearMonth(
+  records: readonly FireObservation[],
+  targetMonth: number,
+  metricType: PrimaryMetricType = 'harmonized',
+  gridResolution = 0.25,
+): {
+  years: number[]
+  monthSummary: MultiYearMonthData[]
+  days: MultiYearDayData[]
+} {
+  // Include standard multi-year comparison range 2020-2026 plus any data years
+  const dataYears = new Set<number>([2020, 2021, 2022, 2023, 2024, 2025, 2026])
+  for (const obs of records) {
+    const y = parseInt(obs.acqDate.slice(0, 4), 10)
+    if (!isNaN(y)) dataYears.add(y)
+  }
+  const years = Array.from(dataYears).sort((a, b) => a - b)
+
+  // Map of year -> observations in targetMonth
+  const yearRecordsMap = new Map<number, FireObservation[]>()
+  for (const y of years) {
+    yearRecordsMap.set(y, [])
+  }
+
+  for (const obs of records) {
+    const y = parseInt(obs.acqDate.slice(0, 4), 10)
+    const m = parseInt(obs.acqDate.slice(5, 7), 10)
+    if (m === targetMonth && yearRecordsMap.has(y)) {
+      yearRecordsMap.get(y)!.push(obs)
+    }
+  }
+
+  // Compute month summaries
+  const monthSummary: MultiYearMonthData[] = []
+  const yearDayAggregates = new Map<
+    string,
+    {
+      total: number
+      modis: number
+      viirs: number
+      activeCells: Set<string>
+      frpSum: number
+      validFrpCount: number
+    }
+  >()
+
+  for (const y of years) {
+    const yearObs = yearRecordsMap.get(y) || []
+    let totalCount = 0
+    let modisCount = 0
+    let viirsCount = 0
+    let frpSum = 0
+    let validFrpCount = 0
+    const activeCells = new Set<string>()
+    const activeDays = new Set<number>()
+
+    let firstObsDate: string | undefined
+    let lastObsDate: string | undefined
+
+    for (const obs of yearObs) {
+      totalCount++
+      const day = parseInt(obs.acqDate.slice(8, 10), 10)
+      activeDays.add(day)
+      const cellKey = getGridCellKey(obs.latitude, obs.longitude, gridResolution)
+      activeCells.add(cellKey)
+
+      if (!firstObsDate || obs.acqDate < firstObsDate) firstObsDate = obs.acqDate
+      if (!lastObsDate || obs.acqDate > lastObsDate) lastObsDate = obs.acqDate
+
+      if (obs.instrument === 'MODIS') modisCount++
+      else viirsCount++
+
+      if (obs.frp !== null && !isNaN(obs.frp)) {
+        frpSum += obs.frp
+        validFrpCount++
+      }
+
+      const dayKey = `${y}-${day}`
+      let dayEntry = yearDayAggregates.get(dayKey)
+      if (!dayEntry) {
+        dayEntry = {
+          total: 0,
+          modis: 0,
+          viirs: 0,
+          activeCells: new Set(),
+          frpSum: 0,
+          validFrpCount: 0,
+        }
+        yearDayAggregates.set(dayKey, dayEntry)
+      }
+      dayEntry.total++
+      dayEntry.activeCells.add(cellKey)
+      if (obs.instrument === 'MODIS') dayEntry.modis++
+      else dayEntry.viirs++
+      if (obs.frp !== null && !isNaN(obs.frp)) {
+        dayEntry.frpSum += obs.frp
+        dayEntry.validFrpCount++
+      }
+    }
+
+    // 2026 is partial (up to October)
+    const isPartial = y === 2026 && targetMonth >= 10
+
+    monthSummary.push({
+      year: y,
+      month: targetMonth,
+      totalCount,
+      harmonizedActiveCells: activeCells.size,
+      modisCount,
+      viirsCount,
+      avgFrp: validFrpCount > 0 ? Number((frpSum / validFrpCount).toFixed(1)) : null,
+      activeDaysCount: activeDays.size,
+      isPartial,
+      firstObsDate,
+      lastObsDate,
+    })
+  }
+
+  // Days in month: standard month length
+  const maxDays = [1, 3, 5, 7, 8, 10, 12].includes(targetMonth)
+    ? 31
+    : targetMonth === 2
+      ? 29
+      : 30
+  const days: MultiYearDayData[] = []
+
+  for (let d = 1; d <= maxDays; d++) {
+    const byYear: MultiYearDayData['byYear'] = {}
+
+    for (const y of years) {
+      const isFeb29 = targetMonth === 2 && d === 29
+      const isLeap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0
+
+      if (isFeb29 && !isLeap) {
+        byYear[y] = {
+          value: 0,
+          rawCount: 0,
+          harmonizedCells: 0,
+          hasData: false,
+          isLeapDay: true,
+        }
+        continue
+      }
+
+      const dayEntry = yearDayAggregates.get(`${y}-${d}`)
+      if (dayEntry) {
+        let val = dayEntry.activeCells.size
+        if (metricType === 'modis') val = dayEntry.modis
+        else if (metricType === 'viirs') val = dayEntry.viirs
+        else if (metricType === 'raw_total') val = dayEntry.total
+        else if (metricType === 'frp') {
+          val =
+            dayEntry.validFrpCount > 0
+              ? Number((dayEntry.frpSum / dayEntry.validFrpCount).toFixed(1))
+              : 0
+        }
+
+        byYear[y] = {
+          value: val,
+          rawCount: dayEntry.total,
+          harmonizedCells: dayEntry.activeCells.size,
+          hasData: true,
+        }
+      } else {
+        byYear[y] = {
+          value: 0,
+          rawCount: 0,
+          harmonizedCells: 0,
+          hasData: true,
+        }
+      }
+    }
+
+    days.push({
+      dayOfMonth: d,
+      byYear,
+    })
+  }
+
+  return { years, monthSummary, days }
+}
+

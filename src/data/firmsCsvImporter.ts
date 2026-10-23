@@ -14,7 +14,10 @@ export interface CsvImportResult {
   warnings: string[]
   rejectedCount: number
   rejectedReasons: string[]
+  duplicateCount: number
 }
+
+export const MAX_SAFE_BROWSER_RECORDS = 50000
 
 /**
  * Split CSV line handling quoted fields safely.
@@ -41,10 +44,12 @@ function parseCsvLine(line: string): string[] {
 
 /**
  * Parses official NASA FIRMS CSV text (MODIS or VIIRS 375m active-fire products).
+ * Enforces coordinate validation, duplicate filtering, missing data guards, and memory safety.
  */
 export function parseFirmsCsv(
   csvText: string,
   fileName = 'nasa_firms_import.csv',
+  maxRecords = MAX_SAFE_BROWSER_RECORDS,
 ): CsvImportResult {
   const warnings: string[] = []
   const rejectedReasons: string[] = []
@@ -65,11 +70,14 @@ export function parseFirmsCsv(
         loadedAt: new Date().toISOString(),
         rejectedCount: 0,
         rejectedReasons: ['The file is completely empty.'],
+        duplicateCount: 0,
+        totalRowsInFile: 0,
       },
       error: 'The uploaded file is empty.',
       warnings: [],
       rejectedCount: 0,
       rejectedReasons: ['Empty file'],
+      duplicateCount: 0,
     }
   }
 
@@ -93,11 +101,14 @@ export function parseFirmsCsv(
         dateRange: { start: '', end: '' },
         loadedAt: new Date().toISOString(),
         rejectedCount: 0,
+        duplicateCount: 0,
+        totalRowsInFile: lines.length - 1,
       },
       error: 'CSV file must contain a header row and at least one observation row.',
       warnings: [],
       rejectedCount: 0,
       rejectedReasons: ['Missing header or data lines.'],
+      duplicateCount: 0,
     }
   }
 
@@ -126,11 +137,14 @@ export function parseFirmsCsv(
         distinctDatesCount: 0,
         dateRange: { start: '', end: '' },
         loadedAt: new Date().toISOString(),
+        duplicateCount: 0,
+        totalRowsInFile: lines.length - 1,
       },
       error: `Missing required FIRMS columns. Found headers: [${rawHeaders.join(', ')}]. Required: latitude, longitude, acq_date.`,
       warnings: [],
       rejectedCount: lines.length - 1,
       rejectedReasons: ['Header validation failed: latitude, longitude, and acq_date are required.'],
+      duplicateCount: 0,
     }
   }
 
@@ -151,9 +165,14 @@ export function parseFirmsCsv(
   const versionIndex = headers.findIndex((h) => h === 'version')
 
   const observations: FireObservation[] = []
+  const seenObservationKeys = new Set<string>()
   let rejectedCount = 0
+  let duplicateCount = 0
 
-  for (let r = 1; r < lines.length; r++) {
+  const totalDataRows = lines.length - 1
+  const processLimit = Math.min(lines.length, maxRecords + 1)
+
+  for (let r = 1; r < processLimit; r++) {
     const rawLine = lines[r]!
     const cols = parseCsvLine(rawLine)
 
@@ -194,7 +213,7 @@ export function parseFirmsCsv(
 
     if (rawInst?.includes('MODIS') || rawSat?.includes('TERRA') || rawSat?.includes('AQUA')) {
       instrument = 'MODIS'
-    } else if (rawInst?.includes('VIIRS') || rawSat?.includes('NPP') || rawSat?.includes('NOAA')) {
+    } else if (rawInst?.includes('VIIRS') || rawSat?.includes('NPP') || rawSat?.includes('NOAA') || rawInst?.includes('SNPP')) {
       instrument = 'VIIRS'
     } else {
       // Check column names for hint (e.g. bright_ti4 indicates VIIRS I-band)
@@ -204,6 +223,14 @@ export function parseFirmsCsv(
         instrument = 'MODIS'
       }
     }
+
+    // Duplicate detection key
+    const dedupeKey = `${instrument}_${dateNorm}_${acqTime}_${lat.toFixed(3)}_${lng.toFixed(3)}`
+    if (seenObservationKeys.has(dedupeKey)) {
+      duplicateCount++
+      continue
+    }
+    seenObservationKeys.add(dedupeKey)
 
     // Parse Satellite
     const satellite =
@@ -287,6 +314,12 @@ export function parseFirmsCsv(
     })
   }
 
+  if (totalDataRows > maxRecords) {
+    warnings.push(
+      `File contains ${totalDataRows.toLocaleString()} rows. Loaded the first ${observations.length.toLocaleString()} records to protect browser responsiveness.`,
+    )
+  }
+
   if (observations.length === 0) {
     return {
       success: false,
@@ -303,11 +336,14 @@ export function parseFirmsCsv(
         loadedAt: new Date().toISOString(),
         rejectedCount,
         rejectedReasons,
+        duplicateCount,
+        totalRowsInFile: totalDataRows,
       },
       error: 'No valid observation rows could be extracted from this CSV file.',
       warnings,
       rejectedCount,
       rejectedReasons,
+      duplicateCount,
     }
   }
 
@@ -333,10 +369,15 @@ export function parseFirmsCsv(
     fileName,
     rejectedCount,
     rejectedReasons,
+    duplicateCount,
+    totalRowsInFile: totalDataRows,
   }
 
   if (rejectedCount > 0) {
     warnings.push(`Loaded ${observations.length} valid rows. Rejected ${rejectedCount} invalid rows.`)
+  }
+  if (duplicateCount > 0) {
+    warnings.push(`Deduplicated ${duplicateCount} coincident duplicate records.`)
   }
 
   return {
@@ -346,5 +387,6 @@ export function parseFirmsCsv(
     warnings,
     rejectedCount,
     rejectedReasons,
+    duplicateCount,
   }
 }

@@ -27,7 +27,11 @@ import {
 import { useFireData } from '@/context/FireDataContext'
 import { FilterBar } from '@/components/shared/FilterBar'
 import { Badge, Card, CardHeader, EmptyState, PageHeader } from '@/components/ui'
-import { aggregateByDate, aggregateByRegion } from '@/utils/aggregation'
+import {
+  aggregateByDate,
+  aggregateByRegion,
+  aggregateSpatialGrid,
+} from '@/utils/aggregation'
 import {
   ANOMALY_SCIENTIFIC_DISCLAIMER,
   detectUnusualActivity,
@@ -36,7 +40,9 @@ import {
 import {
   exportAggregatedDailyCsv,
   exportObservationsCsv,
+  exportObservationsGeoJson,
   exportReportSummary,
+  exportSpatialGridGeoJson,
 } from '@/utils/exportUtils'
 
 export default function InsightsReportsPage() {
@@ -47,13 +53,16 @@ export default function InsightsReportsPage() {
   const [thresholdMultiplier, setThresholdMultiplier] = useState<number>(2.5)
 
   // Aggregated data
-  const dailyData = useMemo(() => aggregateByDate(filteredObservations), [filteredObservations])
-  const regionData = useMemo(() => aggregateByRegion(filteredObservations), [filteredObservations])
+  const dailyData = useMemo(() => aggregateByDate(filteredObservations, filter.gridResolution), [filteredObservations, filter.gridResolution])
+  const regionData = useMemo(() => aggregateByRegion(filteredObservations, filter.gridResolution), [filteredObservations, filter.gridResolution])
 
-  // Statistical anomaly detection report
+  // Statistical anomaly detection report (respects primary analysis metric)
   const anomalyReport = useMemo(() => {
-    return detectUnusualActivity(filteredObservations, thresholdMultiplier)
-  }, [filteredObservations, thresholdMultiplier])
+    return detectUnusualActivity(filteredObservations, {
+      thresholdMultiplier,
+      metricType: filter.metricType,
+    })
+  }, [filteredObservations, thresholdMultiplier, filter.metricType])
 
   // Export handlers
   const handleExportObservations = () => {
@@ -77,6 +86,21 @@ export default function InsightsReportsPage() {
       anomalyReport,
       fileName: `pyrolens_activity_report_${filter.regionId}.md`,
     })
+  }
+
+  const handleExportHotspotsGeoJson = () => {
+    exportObservationsGeoJson(
+      filteredObservations,
+      `pyrolens_${filter.regionId}_hotspots.geojson`,
+    )
+  }
+
+  const handleExportGridGeoJson = () => {
+    const { cells } = aggregateSpatialGrid(filteredObservations, filter.gridResolution)
+    exportSpatialGridGeoJson(
+      cells,
+      `pyrolens_${filter.regionId}_grid_${filter.gridResolution}deg.geojson`,
+    )
   }
 
   return (
@@ -459,8 +483,8 @@ export default function InsightsReportsPage() {
           </Badge>
         </div>
 
-        {/* 3 Export Action Cards */}
-        <div className="grid gap-4 sm:grid-cols-3">
+        {/* 5 Export Action Cards */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {/* Export 1: Observations CSV */}
           <div className="rounded-xl border border-line bg-ink-950 p-4 flex flex-col justify-between space-y-4 hover:border-line-strong transition-colors">
             <div>
@@ -491,7 +515,7 @@ export default function InsightsReportsPage() {
                 <h4 className="font-semibold text-xs">Daily Aggregates CSV</h4>
               </div>
               <p className="mt-1 text-[11px] text-fg-muted leading-relaxed">
-                Aggregated daily time series with separate MODIS and VIIRS counts and sensor-specific mean FRP.
+                Aggregated daily time series with separate MODIS/VIIRS counts, harmonized active cells, and FRP.
               </p>
             </div>
             <button
@@ -505,7 +529,51 @@ export default function InsightsReportsPage() {
             </button>
           </div>
 
-          {/* Export 3: Complete Report Summary Markdown */}
+          {/* Export 3: Hotspots GeoJSON */}
+          <div className="rounded-xl border border-line bg-ink-950 p-4 flex flex-col justify-between space-y-4 hover:border-line-strong transition-colors">
+            <div>
+              <div className="flex items-center gap-2 text-fg">
+                <FileSpreadsheet className="size-4 text-emerald-400" />
+                <h4 className="font-semibold text-xs">Hotspots GeoJSON</h4>
+              </div>
+              <p className="mt-1 text-[11px] text-fg-muted leading-relaxed">
+                FeatureCollection of Point geometries for GIS desktop mapping (QGIS/ArcGIS) and geospatial analyses.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleExportHotspotsGeoJson}
+              disabled={filteredObservations.length === 0}
+              className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-line-strong bg-ink-800 py-2 text-xs font-semibold text-fg hover:bg-ink-700 hover:border-emerald-500/50 disabled:opacity-40 transition-colors"
+            >
+              <ArrowDownToLine className="size-3.5 text-emerald-400" />
+              <span>Download Hotspots (.GeoJSON)</span>
+            </button>
+          </div>
+
+          {/* Export 4: Harmonized Spatial Grid GeoJSON */}
+          <div className="rounded-xl border border-line bg-ink-950 p-4 flex flex-col justify-between space-y-4 hover:border-line-strong transition-colors">
+            <div>
+              <div className="flex items-center gap-2 text-fg">
+                <FileSpreadsheet className="size-4 text-signal-300" />
+                <h4 className="font-semibold text-xs">Spatial Grid Cells GeoJSON</h4>
+              </div>
+              <p className="mt-1 text-[11px] text-fg-muted leading-relaxed">
+                Polygon grid bounding boxes ({filter.gridResolution}°) with MODIS/VIIRS counts and coincidence classification.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleExportGridGeoJson}
+              disabled={filteredObservations.length === 0}
+              className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-line-strong bg-ink-800 py-2 text-xs font-semibold text-fg hover:bg-ink-700 hover:border-signal-300/50 disabled:opacity-40 transition-colors"
+            >
+              <ArrowDownToLine className="size-3.5 text-signal-300" />
+              <span>Download Grid Cells (.GeoJSON)</span>
+            </button>
+          </div>
+
+          {/* Export 5: Complete Report Summary Markdown */}
           <div className="rounded-xl border border-line bg-ink-950 p-4 flex flex-col justify-between space-y-4 hover:border-line-strong transition-colors">
             <div>
               <div className="flex items-center gap-2 text-fg">

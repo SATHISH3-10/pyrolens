@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import type { FireObservation, ObservationFilter } from '@/types/fire'
+import type { CustomAoi, FireObservation, ObservationFilter } from '@/types/fire'
 import {
   aggregateByDate,
   aggregateByMonth,
+  aggregateMultiYearMonth,
   aggregateSpatialGrid,
   calculateSummaryMetrics,
   filterObservations,
+  getGridCellKey,
+  isPointInPolygon,
 } from '@/utils/aggregation'
 import { detectUnusualActivity } from '@/utils/anomalyDetection'
+import {
+  exportCustomAoiGeoJson,
+  exportObservationsGeoJson,
+  exportSpatialGridGeoJson,
+} from '@/utils/exportUtils'
 import { parseFirmsCsv } from '@/data/firmsCsvImporter'
 import { generateSyntheticObservations } from '@/data/syntheticData'
 
@@ -285,3 +293,171 @@ describe('6. Deterministic Synthetic Dataset (generateSyntheticObservations)', (
     expect(run1[0]?.longitude).toBe(run2[0]?.longitude)
   })
 })
+
+describe('7. Jordan Curve Theorem / Ray-Casting (isPointInPolygon)', () => {
+  // Simple square polygon around (10, 70) to (12, 72)
+  const polygon: Array<[number, number]> = [
+    [10, 70],
+    [12, 70],
+    [12, 72],
+    [10, 72],
+  ]
+
+  it('correctly determines that interior point is inside polygon', () => {
+    expect(isPointInPolygon(11.0, 71.0, polygon)).toBe(true)
+    expect(isPointInPolygon(10.5, 70.5, polygon)).toBe(true)
+  })
+
+  it('correctly determines that exterior point is outside polygon', () => {
+    expect(isPointInPolygon(13.0, 71.0, polygon)).toBe(false)
+    expect(isPointInPolygon(9.0, 71.0, polygon)).toBe(false)
+    expect(isPointInPolygon(11.0, 73.0, polygon)).toBe(false)
+    expect(isPointInPolygon(11.0, 69.0, polygon)).toBe(false)
+  })
+
+  it('handles degenerate polygons gracefully', () => {
+    expect(isPointInPolygon(11.0, 71.0, [])).toBe(false)
+    expect(isPointInPolygon(11.0, 71.0, [[10, 70], [12, 70]])).toBe(false)
+  })
+})
+
+describe('8. Spatial Grid Cell Snapping (getGridCellKey)', () => {
+  it('snaps coordinates to uniform grid corners invariant to sensor', () => {
+    // Both points fall in the same 0.25° grid cell [11.25, 76.50]
+    const key1 = getGridCellKey(11.45, 76.60, 0.25)
+    const key2 = getGridCellKey(11.46, 76.65, 0.25)
+    expect(key1).toBe('cell_11.250_76.500')
+    expect(key2).toBe('cell_11.250_76.500')
+    expect(key1).toBe(key2)
+
+    // Point in a different cell
+    const key3 = getGridCellKey(15.75, 78.95, 0.25)
+    expect(key3).toBe('cell_15.750_78.750')
+    expect(key3).not.toBe(key1)
+  })
+})
+
+describe('9. Multi-Year Harmonization Aggregation (aggregateMultiYearMonth)', () => {
+  const multiYearRecords: FireObservation[] = [
+    {
+      ...mockObservations[0]!,
+      id: '2020-obs',
+      acqDate: '2020-03-15',
+    },
+    {
+      ...mockObservations[1]!,
+      id: '2024-obs',
+      acqDate: '2024-03-15',
+    },
+    {
+      ...mockObservations[2]!,
+      id: '2024-leap',
+      acqDate: '2024-02-29', // Leap day
+    },
+    {
+      ...mockObservations[3]!,
+      id: '2026-obs',
+      acqDate: '2026-03-20',
+    },
+  ]
+
+  it('aggregates multi-year month data across available years correctly', () => {
+    const res = aggregateMultiYearMonth(multiYearRecords, 3, 'harmonized')
+    expect(res.years).toContain(2020)
+    expect(res.years).toContain(2024)
+    expect(res.years).toContain(2026)
+
+    const summary2020 = res.monthSummary.find((s) => s.year === 2020)
+    expect(summary2020?.totalCount).toBe(1)
+    expect(summary2020?.harmonizedActiveCells).toBe(1)
+
+    const summary2024 = res.monthSummary.find((s) => s.year === 2024)
+    expect(summary2024?.totalCount).toBe(1)
+
+    // Verify 31 days returned for March
+    expect(res.days.length).toBe(31)
+    // Day 15 should have value for 2020 and 2024
+    const day15 = res.days.find((d) => d.dayOfMonth === 15)
+    expect(day15?.byYear[2020]?.value).toBe(1)
+    expect(day15?.byYear[2024]?.value).toBe(1)
+  })
+
+  it('handles leap day (Feb 29) correctly for leap vs non-leap years', () => {
+    const febRes = aggregateMultiYearMonth(multiYearRecords, 2, 'harmonized')
+    const feb29 = febRes.days.find((d) => d.dayOfMonth === 29)
+    expect(feb29).toBeDefined()
+
+    // 2020 and 2024 are leap years
+    expect(feb29?.byYear[2024]?.isLeapDay).toBeFalsy()
+    expect(feb29?.byYear[2024]?.value).toBe(1)
+
+    // 2021 and 2023 are NOT leap years -> flagged isLeapDay: true
+    expect(feb29?.byYear[2021]?.isLeapDay).toBe(true)
+    expect(feb29?.byYear[2021]?.hasData).toBe(false)
+  })
+})
+
+describe('10. Custom AOI Filtering (filterObservations with customAoi)', () => {
+  it('filters out observations outside custom AOI polygon', () => {
+    const aoi: CustomAoi = {
+      name: 'Test AOI',
+      points: [
+        [11.0, 76.0],
+        [12.0, 76.0],
+        [12.0, 77.0],
+        [11.0, 77.0],
+      ],
+      bounds: { minLat: 11.0, maxLat: 12.0, minLng: 76.0, maxLng: 77.0 },
+      createdAt: '2026-10-23T00:00:00Z',
+    }
+
+    const filter: ObservationFilter = {
+      sensor: 'ALL',
+      startDate: '2024-01-01',
+      endDate: '2024-12-31',
+      regionId: 'all',
+      customAoi: aoi,
+    }
+
+    const res = filterObservations(mockObservations, filter)
+    // Only MODIS-1, VIIRS-2, VIIRS-3 are near (11.45, 76.75) which is inside [11..12, 76..77]
+    expect(res.length).toBe(3)
+    expect(res.every((o) => o.latitude >= 11.0 && o.latitude <= 12.0)).toBe(true)
+  })
+})
+
+describe('11. Duplicate Record Suppression (parseFirmsCsv)', () => {
+  it('detects and suppresses identical duplicate records in FIRMS CSV', () => {
+    const duplicateCsv = `latitude,longitude,acq_date,acq_time,satellite,instrument,confidence,frp
+11.45,76.75,2024-03-15,0530,Terra,MODIS,85,35.0
+11.45,76.75,2024-03-15,0530,Terra,MODIS,85,35.0
+12.00,77.00,2024-03-15,0600,Terra,MODIS,80,20.0`
+
+    const res = parseFirmsCsv(duplicateCsv, 'duplicates.csv')
+    expect(res.success).toBe(true)
+    expect(res.observations.length).toBe(2)
+    expect(res.duplicateCount).toBe(1)
+  })
+})
+
+describe('12. GeoJSON Export Utilities (exportUtils)', () => {
+  it('safely generates GeoJSON for observations, grid cells, and custom AOI', () => {
+    expect(() => exportObservationsGeoJson(mockObservations, 'test_obs.geojson')).not.toThrow()
+    const { cells } = aggregateSpatialGrid(mockObservations, 0.25)
+    expect(() => exportSpatialGridGeoJson(cells, 'test_grid.geojson')).not.toThrow()
+    const aoi: CustomAoi = {
+      name: 'Test AOI',
+      points: [
+        [11, 76],
+        [12, 76],
+        [12, 77],
+        [11, 77],
+      ],
+      bounds: { minLat: 11, maxLat: 12, minLng: 76, maxLng: 77 },
+      createdAt: '2026-10-23T00:00:00Z',
+    }
+    expect(() => exportCustomAoiGeoJson(aoi, 'test_aoi.geojson')).not.toThrow()
+  })
+})
+
+

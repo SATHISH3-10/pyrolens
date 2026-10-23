@@ -231,35 +231,89 @@ export default function MethodologyPage() {
         />
         <div className="space-y-3 text-xs text-fg-muted leading-relaxed">
           <p>
-            To compare observations across sensors with radically different pixel footprints, PyroLens implements a documented <strong className="text-fg">Spatiotemporal Grid Binning Method</strong>:
+            To compare observations across sensors with radically different pixel footprints, PyroLens implements a documented <strong className="text-fg">Harmonized Grid Activity Index</strong>:
           </p>
+          <div className="rounded-lg border border-line bg-ink-950 p-3 font-mono text-center text-xs text-signal-300">
+            H_t = | &#x22C3;_s &#123; Cell(lat_i, lon_i, &Delta;) : (lat_i, lon_i) &isin; Detections_s(t) &#125; |
+          </div>
           <ol className="list-decimal pl-5 space-y-1.5 text-[11px] text-fg-faint">
             <li>
-              <strong className="text-fg-muted">Spatial Quantization:</strong> The geographic coordinates of all observations are mapped into discrete rectangular spatial cells (configurable to 0.10°, 0.25°, or 0.50° latitude and longitude).
+              <strong className="text-fg-muted">Spatial Quantization (&Delta;):</strong> Observation coordinates are mapped into uniform spatial cells (&Delta; = 0.10°, 0.25°, or 0.50° latitude and longitude).
             </li>
             <li>
-              <strong className="text-fg-muted">Temporal Binning:</strong> Observations within each spatial cell are grouped into uniform temporal windows (daily, weekly, or monthly).
+              <strong className="text-fg-muted">Temporal Binning (t):</strong> Observations within each spatial cell are grouped into uniform daily or monthly comparison intervals.
+            </li>
+            <li>
+              <strong className="text-fg-muted">Occupancy Invariance:</strong> Rather than summing raw pixels (where VIIRS produces ~9x more detections for the same fire footprint), the index measures whether a given spatial cell experienced active burning.
             </li>
             <li>
               <strong className="text-fg-muted">Coincident Fire Presence:</strong> Cells containing both MODIS and VIIRS detections within the same space-time window are classified as <code>BOTH_COINCIDENT</code>. Cells with detections from only one sensor are tagged as <code>MODIS_ONLY</code> or <code>VIIRS_ONLY</code>.
             </li>
             <li>
-              <strong className="text-fg-muted">Jaccard Similarity Index:</strong> Spatial agreement between sensors is measured using the Jaccard index:
+              <strong className="text-fg-muted">Jaccard Spatial Similarity Index:</strong> Spatial agreement between sensors is computed as:
               <br />
               <code className="text-signal-300 font-mono">J = N_coincident / (N_modis_only + N_viirs_only + N_coincident)</code>
-            </li>
-            <li>
-              <strong className="text-fg-muted">Detection Multiplier:</strong> The empirical ratio of VIIRS detections to MODIS detections is computed across cells to quantify relative sensor sensitivity.
             </li>
           </ol>
         </div>
       </Card>
 
-      {/* 5. Regional Bounding Envelopes */}
+      {/* 5. Custom AOI & Ray-Casting Geometry */}
+      <Card aria-labelledby="section-aoi">
+        <CardHeader
+          id="section-aoi"
+          title="5. Custom Area of Interest (AOI) & Point-in-Polygon Ray-Casting"
+          description="Vector geometry filtering for user-drawn polygons and GeoJSON imports."
+        />
+        <div className="space-y-3 text-xs text-fg-muted leading-relaxed">
+          <p>
+            When users draw a custom polygon or import GeoJSON boundaries, PyroLens performs spatial containment testing using the classical <strong className="text-fg">Jordan Curve Theorem (Ray-Casting Algorithm)</strong>:
+          </p>
+          <div className="rounded-lg border border-line bg-ink-950 p-3 font-mono text-center text-xs text-ember-300">
+            intersect = ((y_j &gt; y) &ne; (y_k &gt; y)) &amp;&amp; (x &lt; (x_k - x_j) * (y - y_j) / (y_k - y_j) + x_j)
+          </div>
+          <p>
+            A horizontal ray is cast from each observation point <code>(x, y)</code> toward infinity. If the ray intersects an odd number of polygon boundary segments, the observation lies inside the custom AOI. An initial bounding box pre-filter minimizes compute overhead for large archive datasets.
+          </p>
+        </div>
+      </Card>
+
+      {/* 6. Robust Baseline & MAD Anomaly Detection */}
+      <Card aria-labelledby="section-anomaly">
+        <CardHeader
+          id="section-anomaly"
+          title="6. Robust Historical Baseline & MAD Anomaly Detection"
+          description="Non-parametric anomaly detection resistant to extreme wildfire outliers."
+        />
+        <div className="space-y-3 text-xs text-fg-muted leading-relaxed">
+          <p>
+            Wildfire activity exhibits severe skewness with long right tails. Classical parametric statistics (mean and standard deviation) are easily distorted by extreme fire events. PyroLens implements a robust, non-parametric <strong className="text-fg">Median Absolute Deviation (MAD)</strong> anomaly detector:
+          </p>
+          <div className="grid sm:grid-cols-2 gap-3 font-mono text-center text-xs">
+            <div className="rounded-lg border border-line bg-ink-950 p-2.5 text-ember-400">
+              M = median(X)
+            </div>
+            <div className="rounded-lg border border-line bg-ink-950 p-2.5 text-signal-400">
+              MAD = median(|X_i - M|)
+            </div>
+          </div>
+          <p>
+            An observation day with count <code>x</code> is flagged as an unusual activity surge if:
+          </p>
+          <div className="rounded-lg border border-line bg-ink-950 p-3 font-mono text-center text-xs text-emerald-400">
+            x &gt; M + k &times; max(MAD, 1.0)
+          </div>
+          <p>
+            where <code>k</code> is the configurable sensitivity multiplier (2.0x, 2.5x, or 3.0x). When the baseline median is zero (e.g. during wet monsoon months with zero detections), the formula gracefully falls back to an absolute threshold to prevent division by zero.
+          </p>
+        </div>
+      </Card>
+
+      {/* 7. Regional Bounding Envelopes */}
       <Card aria-labelledby="section-regions">
         <CardHeader
           id="section-regions"
-          title="5. Regional Bounding Envelopes & Geographic Limitations"
+          title="7. Regional Bounding Envelopes & Geographic Limitations"
           description="Simplified spatial envelopes used for regional filtering."
         />
         <div className="space-y-3 text-xs text-fg-muted leading-relaxed">
@@ -297,33 +351,31 @@ export default function MethodologyPage() {
         </div>
       </Card>
 
-      {/* 6. Future NASA FIRMS Integration Roadmap */}
-      <Card aria-labelledby="section-roadmap">
+      {/* 8. Literature & Scientific References */}
+      <Card aria-labelledby="section-references">
         <CardHeader
-          id="section-roadmap"
-          title="6. Data Architecture & Future Official NASA FIRMS Integration"
-          description="API key security, schema migration, and operational guidelines."
+          id="section-references"
+          title="8. Scientific References & Remote-Sensing Literature"
+          description="Peer-reviewed foundations governing satellite active-fire observation and sensor harmonization."
         />
-        <div className="space-y-3 text-xs text-fg-muted leading-relaxed">
-          <p>
-            PyroLens is architected with a decoupled <strong>Data Provider Abstraction</strong> (<code>FireDataProvider</code>) that enables seamless migration between educational synthetic demo data and live NASA FIRMS feeds.
-          </p>
-
-          <div className="grid sm:grid-cols-2 gap-3 pt-1">
-            <div className="rounded-lg border border-line bg-ink-950 p-3 space-y-1">
-              <span className="font-semibold text-fg block">CSV Import Integration (Implemented)</span>
-              <p className="text-[11px] text-fg-faint">
-                Users can drag-and-drop official CSV exports downloaded from NASA FIRMS. The built-in client-side parser validates column headers, handles optional FRP fields safely, normalizes satellite names, and assigns regional envelopes.
-              </p>
-            </div>
-
-            <div className="rounded-lg border border-line bg-ink-950 p-3 space-y-1">
-              <span className="font-semibold text-fg block">Direct FIRMS API Key Integration (Future Server-Side)</span>
-              <p className="text-[11px] text-fg-faint">
-                Per NASA security guidelines, MAP_KEY or API secrets must NEVER be exposed in frontend client code. When a live backend service is connected, API keys will reside in server-side environment variables with cached responses.
-              </p>
-            </div>
-          </div>
+        <div className="space-y-2.5 text-xs text-fg-muted leading-relaxed">
+          <ul className="list-disc pl-5 space-y-2 text-[11px] text-fg-faint">
+            <li>
+              <strong className="text-fg">Giglio, L., Schroeder, W., &amp; Justice, C. O. (2016).</strong> The collection 6 MODIS active fire detection algorithm and fire products. <em>Remote Sensing of Environment</em>, 178, 31–41.
+            </li>
+            <li>
+              <strong className="text-fg">Schroeder, W., Oliva, P., Giglio, L., &amp; Csiszar, I. A. (2014).</strong> The New VIIRS 375 m active fire detection data product: Algorithm description and initial assessment. <em>Remote Sensing of Environment</em>, 143, 85–96.
+            </li>
+            <li>
+              <strong className="text-fg">Wooster, M. J., Zhukov, B., &amp; Oertel, D. (2003).</strong> Fire radiative energy for quantitative study of biomass burning: derivation from the BIRD experimental satellite and comparison to MODIS fire products. <em>Remote Sensing of Environment</em>, 86(1), 83–107.
+            </li>
+            <li>
+              <strong className="text-fg">Kaufman, Y. J., Justice, C. O., Flynn, L. P., et al. (1998).</strong> Potential global fire monitoring from EOS-MODIS. <em>Journal of Geophysical Research: Atmospheres</em>, 103(D24), 32215–32238.
+            </li>
+            <li>
+              <strong className="text-fg">NASA FIRMS (2024).</strong> Fire Information for Resource Management System User Documentation &amp; Active Fire Frequently Asked Questions. <em>NASA Earthdata / MODAPS</em>.
+            </li>
+          </ul>
         </div>
       </Card>
     </div>

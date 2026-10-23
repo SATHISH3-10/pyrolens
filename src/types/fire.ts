@@ -17,7 +17,9 @@ export type FireConfidence = number | ConfidenceCategory | string
 
 export type DayNight = 'D' | 'N'
 
-export type DataProvenance = 'synthetic-demo' | 'imported-firms-csv'
+export type DataProvenance = 'synthetic-demo' | 'imported-firms-csv' | 'firms-live-api'
+
+export type PrimaryMetricType = 'harmonized' | 'modis' | 'viirs' | 'raw_total' | 'frp'
 
 export interface FireObservation {
   id: string
@@ -52,14 +54,30 @@ export interface RegionDefinition {
   description: string
 }
 
+export interface CustomAoi {
+  name: string
+  points: Array<[number, number]> // [lat, lng] vertices
+  bounds: {
+    minLat: number
+    maxLat: number
+    minLng: number
+    maxLng: number
+  }
+  createdAt: string
+}
+
 export interface ObservationFilter {
   sensor: 'ALL' | 'MODIS' | 'VIIRS'
+  metricType?: PrimaryMetricType
   startDate: string // YYYY-MM-DD
   endDate: string // YYYY-MM-DD
-  regionId: string // 'all' or specific region ID
+  regionId: string // 'all', specific region ID, or 'custom'
+  customPolygon?: Array<[number, number]> // optional custom polygon vertices [lat, lng]
+  customAoi?: CustomAoi | null
   daynight?: 'ALL' | 'D' | 'N'
   minConfidence?: number | 'low' | 'nominal' | 'high' | 'ALL'
   minFrp?: number
+  gridResolution?: 0.1 | 0.25 | 0.5
 }
 
 export interface DatasetMeta {
@@ -78,12 +96,15 @@ export interface DatasetMeta {
   fileName?: string
   rejectedCount?: number
   rejectedReasons?: string[]
+  duplicateCount?: number
+  totalRowsInFile?: number
 }
 
 export interface SummaryMetrics {
   totalCount: number
   modisCount: number
   viirsCount: number
+  harmonizedActiveCells: number // Number of distinct spatial grid cells with active fire detection
   distinctDatesCount: number
   avgFrp: number | null
   validFrpCount: number
@@ -101,7 +122,8 @@ export interface SummaryMetrics {
 
 export interface DateAggregate {
   date: string // YYYY-MM-DD
-  total: number
+  total: number // Raw count sum (for single sensor or reference)
+  harmonizedActiveCells: number // Harmonized spatial grid cells active on this date (resolution invariant)
   modis: number
   viirs: number
   avgFrp: number | null
@@ -115,15 +137,37 @@ export interface MonthAggregate {
   monthNumber: number // 1-12
   year: number
   total: number
+  harmonizedActiveCells: number
   modis: number
   viirs: number
   avgFrp: number | null
+}
+
+export interface MultiYearComparisonDay {
+  date: string
+  day: number
+  rawTotal: number
+  modisCount: number
+  viirsCount: number
+  harmonizedActiveCells: number
+  avgFrp: number | null
+}
+
+export interface MultiYearComparisonRecord {
+  year: number
+  month: number
+  days: MultiYearComparisonDay[]
+  totalRawCount: number
+  harmonizedActiveCellsTotal: number
+  activeDaysCount: number
+  peakDay: { date: string; value: number }
 }
 
 export interface RegionAggregate {
   regionId: string
   regionName: string
   total: number
+  harmonizedActiveCells: number
   modis: number
   viirs: number
   avgFrp: number | null
@@ -180,4 +224,32 @@ export interface AnomalyReport {
   totalDaysAnalyzed: number
   anomalies: AnomalyRecord[]
   disclaimer: string
+}
+
+export interface MultiYearMonthData {
+  year: number
+  month: number
+  totalCount: number
+  harmonizedActiveCells: number
+  modisCount: number
+  viirsCount: number
+  avgFrp: number | null
+  activeDaysCount: number
+  isPartial: boolean
+  firstObsDate?: string
+  lastObsDate?: string
+}
+
+export interface MultiYearDayData {
+  dayOfMonth: number // 1..31
+  byYear: Record<
+    number,
+    {
+      value: number
+      rawCount: number
+      harmonizedCells: number
+      hasData: boolean
+      isLeapDay?: boolean
+    }
+  >
 }

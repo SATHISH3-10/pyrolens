@@ -5,6 +5,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Flame,
+  Grid,
+  Info,
   MapPin,
   ShieldAlert,
   Sparkles,
@@ -12,7 +14,11 @@ import {
 import { useFireData } from '@/context/FireDataContext'
 import { FilterBar } from '@/components/shared/FilterBar'
 import { Badge, Card, PageHeader } from '@/components/ui'
-import { aggregateByDate, aggregateByMonth } from '@/utils/aggregation'
+import {
+  aggregateByDate,
+  aggregateByMonth,
+  aggregateMultiYearMonth,
+} from '@/utils/aggregation'
 
 const MONTH_NAMES = [
   'January',
@@ -33,17 +39,28 @@ const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export default function HistoricalCalendarPage() {
   const navigate = useNavigate()
-  const { filteredObservations, setFilter } = useFireData()
+  const { filteredObservations, filter, setFilter } = useFireData()
 
   // Calendar view state: Year and Month
   const [viewYear, setViewYear] = useState(2024)
-  const [viewMonth, setViewMonth] = useState(3) // March 2024 default (peak season)
-  const [viewMode, setViewMode] = useState<'daily' | 'monthly'>('daily')
+  const [viewMonth, setViewMonth] = useState(3) // March default
+  const [multiYearMonth, setMultiYearMonth] = useState(3) // Target month for Year-over-Year comparison
+  const [viewMode, setViewMode] = useState<'daily' | 'multiyear' | 'monthly'>('daily')
   const [selectedDate, setSelectedDate] = useState<string | null>('2024-03-18')
 
   // Date aggregates across active filters
   const dailyData = useMemo(() => aggregateByDate(filteredObservations), [filteredObservations])
   const monthlyData = useMemo(() => aggregateByMonth(filteredObservations), [filteredObservations])
+
+  // Multi-year comparative dataset for target month
+  const multiYearData = useMemo(() => {
+    return aggregateMultiYearMonth(
+      filteredObservations,
+      multiYearMonth,
+      filter.metricType,
+      filter.gridResolution,
+    )
+  }, [filteredObservations, multiYearMonth, filter.metricType, filter.gridResolution])
 
   // Map of date string -> daily aggregate
   const dateMap = useMemo(() => {
@@ -206,7 +223,7 @@ export default function HistoricalCalendarPage() {
 
       {/* View Mode & Calendar Controls Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-line bg-ink-900/90 px-4 py-3 text-xs">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => setViewMode('daily')}
@@ -220,6 +237,17 @@ export default function HistoricalCalendarPage() {
           </button>
           <button
             type="button"
+            onClick={() => setViewMode('multiyear')}
+            className={`rounded-lg px-3 py-1.5 font-medium transition-colors ${
+              viewMode === 'multiyear'
+                ? 'bg-ember-500 text-ink-950 font-bold'
+                : 'bg-ink-800 text-fg-muted hover:text-fg'
+            }`}
+          >
+            Year-over-Year Matrix
+          </button>
+          <button
+            type="button"
             onClick={() => setViewMode('monthly')}
             className={`rounded-lg px-3 py-1.5 font-medium transition-colors ${
               viewMode === 'monthly'
@@ -230,6 +258,23 @@ export default function HistoricalCalendarPage() {
             12-Month Overview
           </button>
         </div>
+
+        {viewMode === 'multiyear' && (
+          <div className="flex items-center gap-2">
+            <span className="text-fg-muted font-medium">Comparison Month:</span>
+            <select
+              value={multiYearMonth}
+              onChange={(e) => setMultiYearMonth(Number(e.target.value))}
+              className="rounded-lg border border-line bg-ink-800 px-3 py-1.5 font-medium text-fg focus:outline-none focus:border-ember-500"
+            >
+              {MONTH_NAMES.map((name, i) => (
+                <option key={name} value={i + 1}>
+                  {name} (All Years)
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {viewMode === 'daily' && (
           <div className="flex items-center gap-2">
@@ -446,7 +491,12 @@ export default function HistoricalCalendarPage() {
                   {selectedDayRecord ? (
                     <>
                       <div className="rounded-lg border border-line bg-ink-950 p-3">
-                        <span className="text-[11px] text-fg-faint block">Detected Hotspots</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-fg-faint block">Detected Hotspots</span>
+                          <span className="text-[11px] font-semibold text-signal-300">
+                            Harmonized: {selectedDayRecord.harmonizedActiveCells} cells
+                          </span>
+                        </div>
                         <p className="text-2xl font-bold text-fg mt-0.5">
                           {selectedDayRecord.total}{' '}
                           <span className="text-xs font-normal text-fg-muted">observations</span>
@@ -517,6 +567,149 @@ export default function HistoricalCalendarPage() {
             </Card>
           </div>
         </div>
+      ) : viewMode === 'multiyear' ? (
+        /* Year-over-Year Comparative Matrix View */
+        <div className="space-y-6">
+          {/* Scientific Harmonization Banner */}
+          <div className="flex items-start gap-3 rounded-xl border border-signal-400/30 bg-signal-950/30 p-4 text-xs text-signal-200">
+            <Info className="size-4 shrink-0 text-signal-400 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-semibold text-fg">
+                Multi-Year Temporal Harmonization ({MONTH_NAMES[multiYearMonth - 1]} across 2020–2026)
+              </p>
+              <p className="leading-relaxed text-fg-muted">
+                Cross-year comparisons must be evaluated cautiously due to differences in sensor availability,
+                orbital timing, and cloud occlusions. The matrix below displays{' '}
+                <strong className="text-signal-300">
+                  {(filter.metricType ?? 'harmonized') === 'harmonized'
+                    ? `Harmonized Active Grid Cells (${filter.gridResolution}°)`
+                    : (filter.metricType ?? 'raw_total').toUpperCase()}
+                </strong>
+                . 2026 data reflects available archive and near-real-time observations through October 2026.
+              </p>
+            </div>
+          </div>
+
+          {/* Month Summary Cards across Years */}
+          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 text-xs">
+            {multiYearData.monthSummary.map((ms) => (
+              <Card key={ms.year} padding="sm" className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-sm text-fg">{ms.year}</span>
+                  {ms.isPartial && (
+                    <Badge tone="ember">Partial</Badge>
+                  )}
+                </div>
+                <div>
+                  <span className="text-[10px] text-fg-faint block">
+                    {filter.metricType === 'harmonized' ? 'Active Cells' : 'Hotspots'}
+                  </span>
+                  <span className="text-xl font-bold text-ember-400">
+                    {filter.metricType === 'harmonized'
+                      ? ms.harmonizedActiveCells
+                      : ms.totalCount}
+                  </span>
+                </div>
+                <div className="text-[10px] text-fg-faint space-y-0.5 border-t border-line/40 pt-1 mt-1">
+                  <div>M: {ms.modisCount} · V: {ms.viirsCount}</div>
+                  <div>Active Days: {ms.activeDaysCount}</div>
+                  <div>Avg FRP: {ms.avgFrp !== null ? `${ms.avgFrp} MW` : 'N/A'}</div>
+                </div>
+              </Card>
+            ))}
+          </div>
+
+          {/* Comparative Day-by-Day Heatmap Table */}
+          <Card padding="sm" className="overflow-x-auto">
+            <div className="border-b border-line pb-2 mb-3 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <Grid className="size-4 text-ember-400" />
+                <span className="font-semibold text-fg">
+                  Daily Burning Activity Matrix — {MONTH_NAMES[multiYearMonth - 1]}
+                </span>
+              </div>
+              <span className="text-fg-faint text-[11px]">
+                Click any cell to navigate to that specific date on the map
+              </span>
+            </div>
+
+            <table className="w-full min-w-[700px] border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-line text-fg-muted">
+                  <th className="py-2 px-3 text-left font-semibold w-16">Day</th>
+                  {multiYearData.years.map((y) => (
+                    <th key={y} className="py-2 px-2 text-center font-semibold">
+                      {y}
+                      {y === 2026 && (
+                        <span className="block text-[9px] text-ember-400 font-normal">
+                          (thru Oct)
+                        </span>
+                      )}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line/30">
+                {multiYearData.days.map((row) => (
+                  <tr key={row.dayOfMonth} className="hover:bg-ink-800/40 transition-colors">
+                    <td className="py-1.5 px-3 font-mono font-medium text-fg-muted">
+                      Day {String(row.dayOfMonth).padStart(2, '0')}
+                    </td>
+                    {multiYearData.years.map((y) => {
+                      const entry = row.byYear[y]
+                      if (!entry) {
+                        return (
+                          <td key={y} className="p-1 text-center text-fg-faint text-[10px]">
+                            —
+                          </td>
+                        )
+                      }
+
+                      if (entry.isLeapDay) {
+                        return (
+                          <td
+                            key={y}
+                            className="p-1 text-center text-[10px] text-fg-faint/40 italic"
+                            title="Feb 29 only exists in leap years"
+                          >
+                            —
+                          </td>
+                        )
+                      }
+
+                      const val = entry.value
+                      const hasData = entry.hasData && val > 0
+                      const dateStr = `${y}-${String(multiYearMonth).padStart(2, '0')}-${String(row.dayOfMonth).padStart(2, '0')}`
+
+                      return (
+                        <td key={y} className="p-1 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleExploreDayOnMap(dateStr)}
+                            className={`w-full py-1 px-1 rounded font-mono text-[11px] transition-all hover:scale-105 ${
+                              !hasData
+                                ? 'bg-ink-950/60 text-fg-faint/60 hover:bg-ink-800 hover:text-fg'
+                                : val <= 4
+                                  ? 'bg-ember-500/15 text-ember-300 border border-ember-500/20'
+                                  : val <= 14
+                                    ? 'bg-ember-500/35 text-ember-200 border border-ember-500/40 font-semibold'
+                                    : val <= 29
+                                      ? 'bg-ember-500/60 text-white border border-ember-500/70 font-bold'
+                                      : 'bg-ember-500 text-ink-950 font-bold shadow-glow-ember'
+                            }`}
+                            title={`${dateStr}: ${val} ${filter.metricType} (${entry.rawCount} raw detections)`}
+                          >
+                            {val}
+                          </button>
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
       ) : (
         /* 12-Month Historical Overview Grid */
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -565,3 +758,4 @@ export default function HistoricalCalendarPage() {
     </div>
   )
 }
+

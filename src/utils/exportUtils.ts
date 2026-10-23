@@ -1,8 +1,10 @@
 import type {
   AnomalyReport,
+  CustomAoi,
   DateAggregate,
   FireObservation,
   ObservationFilter,
+  SpatialGridCell,
   SummaryMetrics,
 } from '@/types/fire'
 
@@ -22,7 +24,9 @@ function escapeCsv(val: unknown): string {
  * Triggers a file download in the browser.
  */
 function triggerDownload(content: string, fileName: string, mimeType: string) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return
   const blob = new Blob([content], { type: mimeType })
+  if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -78,7 +82,7 @@ export function exportObservationsCsv(
 }
 
 /**
- * Exports aggregated daily summaries as CSV.
+ * Exports aggregated daily summaries as CSV including the Harmonized Grid Activity Index.
  */
 export function exportAggregatedDailyCsv(
   aggregates: readonly DateAggregate[],
@@ -86,7 +90,8 @@ export function exportAggregatedDailyCsv(
 ) {
   const headers = [
     'Date',
-    'Total_Hotspots',
+    'Harmonized_Active_Grid_Cells',
+    'Total_Raw_Hotspots',
     'MODIS_Hotspots',
     'VIIRS_Hotspots',
     'Average_FRP_MW',
@@ -96,6 +101,7 @@ export function exportAggregatedDailyCsv(
 
   const rows = aggregates.map((d) => [
     escapeCsv(d.date),
+    escapeCsv(d.harmonizedActiveCells),
     escapeCsv(d.total),
     escapeCsv(d.modis),
     escapeCsv(d.viirs),
@@ -105,10 +111,133 @@ export function exportAggregatedDailyCsv(
   ])
 
   const csvContent =
-    '# DEMO DATA NOTICE: Synthetic demonstration data. Not official NASA observations.\n' +
+    '# NOTICE: Hotspots represent satellite thermal anomalies. Raw counts must not be summed blindly across sensors.\n' +
     [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
 
   triggerDownload(csvContent, fileName, 'text/csv;charset=utf-8;')
+}
+
+/**
+ * Exports active fire observations as GeoJSON FeatureCollection (Point geometries).
+ */
+export function exportObservationsGeoJson(
+  records: readonly FireObservation[],
+  fileName = 'pyrolens_observations.geojson',
+) {
+  // Cap at 15,000 to prevent browser string freeze
+  const exportSet = records.slice(0, 15000)
+
+  const featureCollection = {
+    type: 'FeatureCollection',
+    metadata: {
+      generatedAt: new Date().toISOString(),
+      platform: 'PyroLens — NASA Fire Activity Intelligence Platform',
+      disclaimer: 'Hotspots represent satellite thermal anomalies, not confirmed fire perimeters or burned area.',
+      totalExported: exportSet.length,
+      totalMatching: records.length,
+    },
+    features: exportSet.map((obs) => ({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [obs.longitude, obs.latitude], // GeoJSON order: [lng, lat]
+      },
+      properties: {
+        id: obs.id,
+        acqDate: obs.acqDate,
+        acqTime: obs.acqTime,
+        instrument: obs.instrument,
+        satellite: obs.satellite,
+        confidence: obs.confidence,
+        frp: obs.frp,
+        daynight: obs.daynight,
+        region: obs.regionName,
+        provenance: obs.provenance,
+      },
+    })),
+  }
+
+  triggerDownload(JSON.stringify(featureCollection, null, 2), fileName, 'application/geo+json;charset=utf-8;')
+}
+
+/**
+ * Exports Harmonized Spatial Grid Cells as GeoJSON FeatureCollection (Polygon geometries).
+ */
+export function exportSpatialGridGeoJson(
+  cells: readonly SpatialGridCell[],
+  fileName = 'pyrolens_harmonized_grid.geojson',
+) {
+  const featureCollection = {
+    type: 'FeatureCollection',
+    metadata: {
+      generatedAt: new Date().toISOString(),
+      platform: 'PyroLens Harmonization Engine',
+      definition: 'Spatial grid cells with coincident detection and cross-sensor activity metrics. Polygons represent grid bins, NOT fire boundaries.',
+      totalCells: cells.length,
+    },
+    features: cells.map((c) => ({
+      type: 'Feature',
+      geometry: {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [c.minLng, c.minLat],
+            [c.maxLng, c.minLat],
+            [c.maxLng, c.maxLat],
+            [c.minLng, c.maxLat],
+            [c.minLng, c.minLat],
+          ],
+        ],
+      },
+      properties: {
+        cellId: c.cellId,
+        category: c.category,
+        modisCount: c.modisCount,
+        viirsCount: c.viirsCount,
+        totalRawCount: c.totalCount,
+        avgFrp: c.avgFrp,
+        modisFrpSum: c.modisFrpSum,
+        viirsFrpSum: c.viirsFrpSum,
+      },
+    })),
+  }
+
+  triggerDownload(JSON.stringify(featureCollection, null, 2), fileName, 'application/geo+json;charset=utf-8;')
+}
+
+/**
+ * Exports a user-drawn Custom Area of Interest (AOI) as GeoJSON Polygon.
+ */
+export function exportCustomAoiGeoJson(
+  aoi: CustomAoi,
+  fileName = 'pyrolens_custom_aoi.geojson',
+) {
+  // Convert [lat, lng] to GeoJSON [lng, lat]
+  const coordinates = aoi.points.map(([lat, lng]) => [lng, lat])
+  // Ensure closed ring
+  if (
+    coordinates.length > 0 &&
+    (coordinates[0]![0] !== coordinates[coordinates.length - 1]![0] ||
+      coordinates[0]![1] !== coordinates[coordinates.length - 1]![1])
+  ) {
+    coordinates.push(coordinates[0]!)
+  }
+
+  const geoJson = {
+    type: 'Feature',
+    properties: {
+      name: aoi.name,
+      createdAt: aoi.createdAt,
+      type: 'Custom Area of Interest (AOI)',
+      bounds: aoi.bounds,
+    },
+    geometry: {
+      type: 'Polygon',
+      coordinates: [coordinates],
+    },
+  }
+
+  triggerDownload(JSON.stringify(geoJson, null, 2), fileName, 'application/geo+json;charset=utf-8;')
 }
 
 /**
@@ -131,14 +260,16 @@ export function exportReportSummary(options: {
     '',
     '## 1. Filter Parameters & Scope',
     `- **Sensor Selection:** ${filter.sensor}`,
+    `- **Primary Metric:** ${filter.metricType}`,
     `- **Date Range:** ${filter.startDate || 'Unbounded'} to ${filter.endDate || 'Unbounded'}`,
     `- **Region Filter:** ${filter.regionId === 'all' ? 'All India' : filter.regionId}`,
     `- **Report Generated At:** ${new Date().toUTCString()}`,
     '',
     '## 2. Observation Summary',
-    `- **Total Observations:** ${summary.totalCount}`,
-    `- **MODIS Detections:** ${summary.modisCount} (${summary.totalCount > 0 ? ((summary.modisCount / summary.totalCount) * 100).toFixed(1) : 0}%)`,
-    `- **VIIRS Detections:** ${summary.viirsCount} (${summary.totalCount > 0 ? ((summary.viirsCount / summary.totalCount) * 100).toFixed(1) : 0}%)`,
+    `- **Total Raw Detections:** ${summary.totalCount}`,
+    `- **Harmonized Active Grid Cells (0.25°):** ${summary.harmonizedActiveCells}`,
+    `- **MODIS Detections (1 km):** ${summary.modisCount} (${summary.totalCount > 0 ? ((summary.modisCount / summary.totalCount) * 100).toFixed(1) : 0}%)`,
+    `- **VIIRS Detections (375 m):** ${summary.viirsCount} (${summary.totalCount > 0 ? ((summary.viirsCount / summary.totalCount) * 100).toFixed(1) : 0}%)`,
     `- **Active Observation Dates:** ${summary.distinctDatesCount}`,
     `- **Average Fire Radiative Power (FRP):** ${summary.avgFrp !== null ? `${summary.avgFrp} MW` : 'Not available'}`,
     `- **MODIS Average FRP:** ${summary.modisAvgFrp !== null ? `${summary.modisAvgFrp} MW` : 'N/A'}`,
@@ -148,21 +279,21 @@ export function exportReportSummary(options: {
     '## 3. Sensor Harmonization & Methodology Note',
     '- **Spatial Resolution:** MODIS operates at 1000m nadir resolution with substantial bow-tie distortion at scan edges. VIIRS 375m I-Band preserves a sharper ~375m footprint across the swath.',
     '- **Count Disparity:** Because VIIRS has ~9x the pixel resolution of MODIS, raw hotspot counts from VIIRS are typically 2x to 4x higher for the same fire episode.',
-    '- **Scientific Rule:** Raw counts must not be summed blindly. Comparing activity requires spatial-temporal grid cell binning.',
+    '- **Scientific Rule:** Raw counts must not be summed blindly. The Harmonized Grid Activity Index groups observations into uniform spatial cells.',
     '',
     '## 4. Statistical Anomaly Detection Findings',
     `- **Baseline Method:** ${anomalyReport.baselineMethod}`,
-    `- **Baseline Median:** ${anomalyReport.baselineMedian} hotspots/day`,
+    `- **Baseline Median:** ${anomalyReport.baselineMedian}`,
     `- **MAD Spread:** ${anomalyReport.madValue}`,
-    `- **Threshold Multiplier:** ${anomalyReport.thresholdMultiplier}x (Cutoff: ${anomalyReport.thresholdValue} hotspots/day)`,
+    `- **Threshold Multiplier:** ${anomalyReport.thresholdMultiplier}x (Cutoff: ${anomalyReport.thresholdValue})`,
     `- **Days Analyzed:** ${anomalyReport.totalDaysAnalyzed}`,
     `- **Flagged Anomaly Periods:** ${anomalyReport.anomalies.length}`,
     '',
   ]
 
   if (anomalyReport.anomalies.length > 0) {
-    lines.push('| Date | Observed Count | Baseline | Anomaly Score | Severity | Explanation |')
-    lines.push('| ---- | -------------- | -------- | ------------- | -------- | ----------- |')
+    lines.push('| Date | Observed Value | Baseline Median | Anomaly Score | Severity | Explanation |')
+    lines.push('| ---- | -------------- | --------------- | ------------- | -------- | ----------- |')
     for (const anom of anomalyReport.anomalies) {
       lines.push(
         `| ${anom.date} | ${anom.observedCount} | ${anom.baselineValue} | +${anom.anomalyScore} | ${anom.severity} | ${anom.explanation} |`,

@@ -75,17 +75,22 @@ function CustomChartTooltip({ active, payload, label }: CustomTooltipProps) {
 }
 
 export default function OverviewPage() {
-  const { filteredObservations, summaryMetrics, metadata, setSelectedObservationId } =
-    useFireData()
+  const {
+    filteredObservations,
+    summaryMetrics,
+    metadata,
+    filter,
+    setSelectedObservationId,
+  } = useFireData()
 
   const [tableSearch, setTableSearch] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
   const pageSize = 8
 
   // Aggregated data for charts
-  const dateData = useMemo(() => aggregateByDate(filteredObservations), [filteredObservations])
-  const monthData = useMemo(() => aggregateByMonth(filteredObservations), [filteredObservations])
-  const regionData = useMemo(() => aggregateByRegion(filteredObservations), [filteredObservations])
+  const dateData = useMemo(() => aggregateByDate(filteredObservations, filter.gridResolution), [filteredObservations, filter.gridResolution])
+  const monthData = useMemo(() => aggregateByMonth(filteredObservations, filter.gridResolution), [filteredObservations, filter.gridResolution])
+  const regionData = useMemo(() => aggregateByRegion(filteredObservations, filter.gridResolution), [filteredObservations, filter.gridResolution])
 
   // Diurnal day vs night data
   const diurnalData = useMemo(() => {
@@ -159,8 +164,8 @@ export default function OverviewPage() {
         </div>
       </div>
 
-      {/* 5 Summary Metric Cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      {/* 6 Summary Metric Cards */}
+      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
         {/* Total Observations */}
         <Card padding="sm" className="relative overflow-hidden">
           <div className="flex items-center justify-between text-xs text-fg-muted">
@@ -171,7 +176,21 @@ export default function OverviewPage() {
             {summaryMetrics.totalCount.toLocaleString()}
           </p>
           <p className="mt-1 text-[11px] text-fg-faint">
-            Across {summaryMetrics.distinctDatesCount} observation days
+            Raw detections
+          </p>
+        </Card>
+
+        {/* Harmonized Active Grid Cells */}
+        <Card padding="sm" className="relative overflow-hidden border-signal-400/40 bg-signal-950/20">
+          <div className="flex items-center justify-between text-xs text-signal-300">
+            <span className="font-semibold">Harmonized Cells</span>
+            <Layers className="size-4 text-signal-400" aria-hidden="true" />
+          </div>
+          <p className="mt-2 text-2xl font-bold tracking-tight text-signal-300">
+            {summaryMetrics.harmonizedActiveCells.toLocaleString()}
+          </p>
+          <p className="mt-1 text-[11px] text-signal-400/70">
+            {filter.gridResolution}° spatial cells
           </p>
         </Card>
 
@@ -186,7 +205,7 @@ export default function OverviewPage() {
           </p>
           <div className="mt-1 flex items-center justify-between text-[11px] text-fg-faint">
             <span>{modisShare}% share</span>
-            <span className="font-mono">Terra / Aqua</span>
+            <span className="font-mono">Terra/Aqua</span>
           </div>
         </Card>
 
@@ -201,7 +220,7 @@ export default function OverviewPage() {
           </p>
           <div className="mt-1 flex items-center justify-between text-[11px] text-fg-faint">
             <span>{viirsShare}% share</span>
-            <span className="font-mono">SNPP / NOAA</span>
+            <span className="font-mono">SNPP/NOAA</span>
           </div>
         </Card>
 
@@ -230,8 +249,8 @@ export default function OverviewPage() {
           </p>
           <p className="mt-1 text-[11px] text-fg-faint">
             {summaryMetrics.validFrpCount > 0
-              ? `From ${summaryMetrics.validFrpCount.toLocaleString()} valid retrievals`
-              : 'No valid FRP data'}
+              ? `From ${summaryMetrics.validFrpCount.toLocaleString()} retrievals`
+              : 'No valid FRP'}
           </p>
         </Card>
       </div>
@@ -283,6 +302,15 @@ export default function OverviewPage() {
                     align="right"
                     iconType="circle"
                     wrapperStyle={{ fontSize: '11px', paddingBottom: '10px' }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="harmonizedActiveCells"
+                    name={`Harmonized Cells (${filter.gridResolution}°)`}
+                    stroke="#10b981"
+                    strokeWidth={2}
+                    strokeDasharray="4 4"
+                    fillOpacity={0}
                   />
                   <Area
                     type="monotone"
@@ -341,8 +369,9 @@ export default function OverviewPage() {
                     iconType="rect"
                     wrapperStyle={{ fontSize: '11px', paddingBottom: '10px' }}
                   />
-                  <Bar dataKey="modis" name="MODIS" fill="#ff8a1f" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="viirs" name="VIIRS" fill="#0ea5e9" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="harmonizedActiveCells" name={`Harmonized Cells (${filter.gridResolution}°)`} fill="#10b981" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="modis" name="MODIS (1 km)" fill="#ff8a1f" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="viirs" name="VIIRS (375 m)" fill="#0ea5e9" radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
