@@ -161,38 +161,15 @@ For direct automated synchronization with NASA FIRMS:
 
 ---
 
-## 11. Deployment Instructions
+## 11. Deployment Instructions (Vercel)
 
-PyroLens is pre-configured with routing rewrites and API proxies for **Vercel**, **Netlify**, and **Render**.
+PyroLens is pre-configured for direct, zero-configuration deployment on **Vercel**:
 
-### A. Deploying to Vercel (Recommended)
-1. Push your repository to GitHub, GitLab, or Bitbucket.
-2. In Vercel, click **"Add New Project"** and import the repository (or select root directory `PyroLens_Part1/pyrolens`).
-3. Framework Preset will auto-detect **Vite**.
+1. Push your repository to GitHub.
+2. In [Vercel](https://vercel.com/new), click **"Add New Project"** and select your `pyrolens` repository.
+3. Framework Preset will auto-detect **Vite** (Build command: `npm run build`, Output directory: `dist`).
 4. In **Environment Variables**, add:
-   - `VITE_NASA_FIRMS_MAP_KEY` = `your_32_char_nasa_key`
+   - `VITE_NASA_FIRMS_MAP_KEY` = `your_32_char_nasa_key` (Optional)
 5. Click **Deploy**.
-6. The included [`vercel.json`](file:///e:/Nasa/PyroLens_Part1/pyrolens/vercel.json) handles client-side React Router rewrites (`/* -> /index.html`) and proxies NASA FIRMS API requests (`/api/firms/* -> https://firms.modaps.eosdis.nasa.gov/api/*`) seamlessly without CORS issues.
-
-### B. Deploying to Netlify
-1. Connect your repository on Netlify.
-2. Build Settings:
-   - **Base directory:** `PyroLens_Part1/pyrolens` (if monorepo) or root
-   - **Build command:** `npm run build`
-   - **Publish directory:** `dist`
-3. In **Site Configuration > Environment Variables**, add:
-   - `VITE_NASA_FIRMS_MAP_KEY` = `your_32_char_nasa_key`
-4. The included [`netlify.toml`](file:///e:/Nasa/PyroLens_Part1/pyrolens/netlify.toml) and [`public/_redirects`](file:///e:/Nasa/PyroLens_Part1/pyrolens/public/_redirects) configure the proxy and SPA routing automatically.
-
-### C. Deploying to Render
-1. In Render, select **"New Static Site"** and connect your repository.
-2. Configuration:
-   - **Root Directory:** `PyroLens_Part1/pyrolens`
-   - **Build Command:** `npm run build`
-   - **Publish Directory:** `dist`
-3. Under **Redirects/Rewrites**:
-   - Add a rewrite rule: Source `/*` -> Destination `/index.html` (Rewrite).
-4. Under **Environment Variables**:
-   - Add `VITE_NASA_FIRMS_MAP_KEY` = `your_32_char_nasa_key`.
-5. Click **Save & Deploy**.
+6. The included [`vercel.json`](file:///e:/Nasa/PyroLens_Part1/pyrolens/vercel.json) handles client-side React Router rewrites (`/* -> /index.html`) and proxies NASA FIRMS API requests (`/api/firms/* -> https://firms.modaps.eosdis.nasa.gov/api/*`) seamlessly without CORS issues or server costs.
 

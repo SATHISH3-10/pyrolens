@@ -1,2 +1,0 @@
-/api/firms/*  https://firms.modaps.eosdis.nasa.gov/api/:splat  200!
-/*  /index.html  200
