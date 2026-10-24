@@ -21,14 +21,21 @@ export interface AnomalyDetectionOptions {
 export function detectUnusualActivity(
   records: readonly FireObservation[],
   options: number | AnomalyDetectionOptions = 2.5,
+  legacyReferenceRecords?: readonly FireObservation[],
 ): AnomalyReport {
   // Support both legacy number argument and new options object
   const opts: AnomalyDetectionOptions =
-    typeof options === 'number' ? { thresholdMultiplier: options } : options
+    typeof options === 'number'
+      ? {
+          thresholdMultiplier: options,
+          metricType: 'raw_total',
+          referenceRecords: legacyReferenceRecords,
+        }
+      : options
 
   const thresholdMultiplier = opts.thresholdMultiplier ?? 2.5
-  const metricType = opts.metricType ?? 'harmonized'
-  const referenceRecords = opts.referenceRecords ?? records
+  const metricType = opts.metricType ?? (typeof options === 'number' ? 'raw_total' : 'harmonized')
+  const referenceRecords = legacyReferenceRecords ?? opts.referenceRecords ?? records
   const baselineLabel = opts.baselinePeriodLabel ?? 'Active Window Baseline'
 
   if (records.length === 0) {

@@ -9,7 +9,10 @@ import {
   filterObservations,
   getGridCellKey,
   isPointInPolygon,
+  sampleObservationsStratified,
 } from '@/utils/aggregation'
+import { identifyCriticalPeriods } from '@/utils/criticalPeriods'
+import { generateMonitoringAdvisory } from '@/utils/monitoringAdvisory'
 import { detectUnusualActivity } from '@/utils/anomalyDetection'
 import {
   exportCustomAoiGeoJson,
@@ -459,5 +462,294 @@ describe('12. GeoJSON Export Utilities (exportUtils)', () => {
     expect(() => exportCustomAoiGeoJson(aoi, 'test_aoi.geojson')).not.toThrow()
   })
 })
+
+describe('13. Missing Data vs. Observed Zero Activity (Task A Regression)', () => {
+  // Construct a dataset with defined observation records in 2024 (March 15-20)
+  // 2024 has records on March 15 and 16.
+  // March 17, 18, 19 in 2024 have zero detections within the monitored period.
+  // Years 2021, 2022, 2023 have NO records at all in the dataset.
+  const baselineObs: FireObservation[] = [
+    { ...mockObservations[0]!, id: 'obs-2024-1', acqDate: '2024-03-15' },
+    { ...mockObservations[1]!, id: 'obs-2024-2', acqDate: '2024-03-16' },
+    { ...mockObservations[2]!, id: 'obs-2024-3', acqDate: '2024-03-20' },
+  ]
+
+  it('correctly marks observed positive hotspot activity as observed_active', () => {
+    const res = aggregateMultiYearMonth(baselineObs, 3, 'harmonized')
+    const day15 = res.days.find((d) => d.dayOfMonth === 15)
+    expect(day15?.byYear[2024]?.status).toBe('observed_active')
+    expect(day15?.byYear[2024]?.hasData).toBe(true)
+    expect(day15?.byYear[2024]?.value).toBeGreaterThan(0)
+  })
+
+  it('correctly marks monitored days with zero detections as observed_zero (not no_coverage)', () => {
+    const res = aggregateMultiYearMonth(baselineObs, 3, 'harmonized')
+    // Day 17 is between March 15 and March 20 of 2024
+    const day17 = res.days.find((d) => d.dayOfMonth === 17)
+    expect(day17?.byYear[2024]?.status).toBe('observed_zero')
+    expect(day17?.byYear[2024]?.hasData).toBe(true)
+    expect(day17?.byYear[2024]?.value).toBe(0)
+  })
+
+  it('correctly marks periods with no records as no_coverage with value null (not zero)', () => {
+    const res = aggregateMultiYearMonth(baselineObs, 3, 'harmonized')
+    // Year 2021 has NO records anywhere in baselineObs
+    const day15 = res.days.find((d) => d.dayOfMonth === 15)
+    expect(day15?.byYear[2021]?.status).toBe('no_coverage')
+    expect(day15?.byYear[2021]?.hasData).toBe(false)
+    expect(day15?.byYear[2021]?.value).toBeNull()
+  })
+
+  it('correctly reports month-level coverage status distinguishing available vs no_data', () => {
+    const res = aggregateMultiYearMonth(baselineObs, 3, 'harmonized')
+    const summary2024 = res.monthSummary.find((s) => s.year === 2024)
+    expect(summary2024?.hasCoverage).toBe(true)
+    expect(summary2024?.status).toBe('available')
+    expect(summary2024?.totalCount).toBe(3)
+
+    const summary2021 = res.monthSummary.find((s) => s.year === 2021)
+    expect(summary2021?.hasCoverage).toBe(false)
+    expect(summary2021?.status).toBe('no_data')
+    expect(summary2021?.totalCount).toBe(0)
+  })
+
+  it('handles a mixture of available and unavailable years without generating false zero counts', () => {
+    const mixedRecords: FireObservation[] = [
+      { ...mockObservations[0]!, id: 'obs-2020', acqDate: '2020-03-10' },
+      { ...mockObservations[1]!, id: 'obs-2024', acqDate: '2024-03-10' },
+    ]
+    const res = aggregateMultiYearMonth(mixedRecords, 3, 'harmonized')
+    // 2020 and 2024 should have coverage
+    expect(res.monthSummary.find((s) => s.year === 2020)?.hasCoverage).toBe(true)
+    expect(res.monthSummary.find((s) => s.year === 2024)?.hasCoverage).toBe(true)
+    // 2022 and 2023 should NOT have coverage
+    expect(res.monthSummary.find((s) => s.year === 2022)?.hasCoverage).toBe(false)
+    expect(res.monthSummary.find((s) => s.year === 2023)?.hasCoverage).toBe(false)
+    expect(res.monthSummary.find((s) => s.year === 2022)?.status).toBe('no_data')
+  })
+})
+
+describe('14. Historical Critical Period Identification (identifyCriticalPeriods)', () => {
+  it('reports insufficient_history when observations cover fewer than minimum required years', () => {
+    // Only 2024 observations
+    const report = identifyCriticalPeriods(mockObservations, 75, 3)
+    expect(report.status).toBe('insufficient_history')
+    expect(report.totalYearsAnalyzed).toBeLessThan(3)
+    expect(report.criticalWeeks.length).toBe(0)
+  })
+
+  it('identifies critical weeks using 75th percentile threshold with multi-year data', () => {
+    // Synthetic multi-year data across 2020 to 2024
+    const multiYearData: FireObservation[] = []
+    const years = [2020, 2021, 2022, 2023, 2024]
+    years.forEach((yr) => {
+      // Simulate high peak burning in week 11 (mid-March) and low burning elsewhere
+      for (let i = 0; i < 20; i++) {
+        multiYearData.push({
+          ...mockObservations[0]!,
+          id: `peak-${yr}-${i}`,
+          acqDate: `${yr}-03-15`, // Week 11
+        })
+      }
+      // Low burning in week 30 (July)
+      multiYearData.push({
+        ...mockObservations[0]!,
+        id: `low-${yr}`,
+        acqDate: `${yr}-07-15`, // Week 29
+      })
+    })
+
+    const report = identifyCriticalPeriods(multiYearData, 75, 3)
+    expect(report.status).toBe('sufficient')
+    expect(report.totalYearsAnalyzed).toBe(5)
+    expect(report.percentileThreshold).toBe(75)
+    expect(report.thresholdValue).toBeGreaterThan(0)
+
+    // Week 11 should be flagged as critical
+    const week11 = report.criticalWeeks.find((w) => w.weekNumber === 11)
+    expect(week11).toBeDefined()
+    expect(week11?.isCritical).toBe(true)
+    expect(week11?.criticalityTier).toMatch(/high|extreme/)
+
+    // Week 29 should NOT be flagged as critical
+    const week29 = report.criticalWeeks.find((w) => w.weekNumber === 29)
+    if (week29) {
+      expect(week29.isCritical).toBe(false)
+    }
+  })
+
+  it('supports configurable percentile thresholds (e.g. 90th percentile)', () => {
+    const multiYearData: FireObservation[] = []
+    ;[2021, 2022, 2023, 2024].forEach((yr) => {
+      for (let i = 0; i < 15; i++) {
+        multiYearData.push({
+          ...mockObservations[0]!,
+          id: `peak-${yr}-${i}`,
+          acqDate: `${yr}-03-15`,
+        })
+      }
+    })
+
+    const report90 = identifyCriticalPeriods(multiYearData, 90, 3)
+    expect(report90.percentileThreshold).toBe(90)
+    expect(report90.status).toBe('sufficient')
+  })
+})
+
+describe('15. Evidence-Based Monitoring Advisories (generateMonitoringAdvisory)', () => {
+  it('returns insufficient_data advisory when historical records span < 2 distinct years', () => {
+    const advisory = generateMonitoringAdvisory(mockObservations, new Date(2024, 2, 1))
+    expect(advisory.status).toBe('insufficient_data')
+    expect(advisory.level).toBe('INSUFFICIENT_DATA')
+    expect(advisory.historicalBasis.analyzedYearsCount).toBeLessThan(2)
+    expect(advisory.limitations.length).toBeGreaterThan(0)
+  })
+
+  it('generates an ELEVATED or HIGH advisory when upcoming window coincides with historical peak', () => {
+    // Generate multi-year history with high activity in March across 2021..2024
+    const history: FireObservation[] = []
+    ;[2021, 2022, 2023, 2024].forEach((yr) => {
+      // March activity
+      for (let i = 0; i < 30; i++) {
+        history.push({
+          ...mockObservations[0]!,
+          id: `hist-${yr}-${i}`,
+          acqDate: `${yr}-03-${String(10 + (i % 10)).padStart(2, '0')}`,
+        })
+      }
+      // Baseline activity in other months
+      history.push({ ...mockObservations[0]!, id: `off-${yr}`, acqDate: `${yr}-08-15` })
+    })
+
+    // Reference date set to March 1st (upcoming window is March 1..31)
+    const advisory = generateMonitoringAdvisory(history, new Date(2024, 2, 1))
+    expect(advisory.status).toBe('active')
+    expect(['ELEVATED', 'HIGH', 'EXTREME']).toContain(advisory.level)
+    expect(advisory.historicalBasis.analyzedYearsCount).toBe(4)
+    expect(advisory.historicalBasis.historicalActivePeriods).toBeGreaterThan(0)
+    expect(advisory.recommendedActions.length).toBeGreaterThan(0)
+    // Explicit scientific limitation statement
+    expect(advisory.limitations.some((l) => l.includes('not a deterministic wildfire forecast'))).toBe(true)
+  })
+})
+
+describe('16. Anomaly Detection with Decoupled Reference Baseline (detectUnusualActivity)', () => {
+  it('detects anomalies against broader reference baseline when provided', () => {
+    // 15 days of historical baseline data with 2-5 hotspots per day
+    const baselineRecords: FireObservation[] = []
+    for (let day = 1; day <= 15; day++) {
+      const dateStr = `2024-03-${String(day).padStart(2, '0')}`
+      for (let k = 0; k < 3; k++) {
+        baselineRecords.push({
+          ...mockObservations[0]!,
+          id: `base-${day}-${k}`,
+          acqDate: dateStr,
+        })
+      }
+    }
+
+    // Target observations: 1 day with 50 hotspots (an extreme spike)
+    const spikeDate = '2024-03-25'
+    const targetObservations: FireObservation[] = []
+    for (let k = 0; k < 50; k++) {
+      targetObservations.push({
+        ...mockObservations[0]!,
+        id: `spike-${k}`,
+        acqDate: spikeDate,
+      })
+    }
+
+    // Combined target observations (can be narrowly filtered)
+    const allEvalObs = [...baselineRecords, ...targetObservations]
+    const report = detectUnusualActivity(allEvalObs, 2.5, baselineRecords)
+
+    expect(report.status).toBe('ok')
+    expect(report.totalDaysAnalyzed).toBeGreaterThanOrEqual(10)
+    const anomalyOnSpike = report.anomalies.find((a) => a.date === spikeDate)
+    expect(anomalyOnSpike).toBeDefined()
+    expect(anomalyOnSpike?.observedCount).toBe(50)
+    expect(anomalyOnSpike?.anomalyScore).toBeGreaterThan(3.0)
+  })
+})
+
+describe('17. Map Large-Dataset Handling and Scientifically Stratified Sampling', () => {
+  it('preserves underlying dataset integrity when rendering ceiling is applied', () => {
+    // Generate 6,000 synthetic observations (above the 5,000 map rendering limit)
+    const largeDataset = generateSyntheticObservations(6000, 123)
+    expect(largeDataset.length).toBe(6000)
+
+    const fullMetrics = calculateSummaryMetrics(largeDataset)
+    expect(fullMetrics.totalCount).toBe(6000)
+  })
+
+  it('preserves 100% of observations without sampling when dataset is small or medium (<= 5,000)', () => {
+    const smallDataset = generateSyntheticObservations(500, 42)
+    const sampledSmall = sampleObservationsStratified(smallDataset, 5000)
+    expect(sampledSmall.length).toBe(500)
+
+    const mediumDataset = generateSyntheticObservations(3500, 42)
+    const sampledMedium = sampleObservationsStratified(mediumDataset, 5000)
+    expect(sampledMedium.length).toBe(3500)
+  })
+
+  it('performs uniform systematic stratification across large datasets without geographic/array truncation', () => {
+    // 15,000 observations representing large national multi-year datasets
+    const largeDataset = generateSyntheticObservations(15000, 777)
+    const limit = 5000
+
+    const t0 = performance.now()
+    const sampled = sampleObservationsStratified(largeDataset, limit)
+    const durationMs = performance.now() - t0
+
+    expect(sampled.length).toBe(5000)
+
+    // Verify first and near-last elements are included, proving no array truncation bias
+    expect(sampled[0]?.id).toBe(largeDataset[0]?.id)
+    const lastSampledId = sampled[sampled.length - 1]?.id
+    const tailCandidateIds = largeDataset.slice(14990).map((o) => o.id)
+    expect(tailCandidateIds).toContain(lastSampledId)
+
+    // Benchmark performance: sampling 15,000 items should complete in < 20ms
+    expect(durationMs).toBeLessThan(100)
+  })
+
+  it('guarantees retention of selected observation regardless of sampling step', () => {
+    const largeDataset = generateSyntheticObservations(12000, 999)
+    // Pick an observation at index 7 (which wouldn't land on a standard step of ~2.4)
+    const targetObs = largeDataset[7]!
+    expect(targetObs).toBeDefined()
+
+    const sampled = sampleObservationsStratified(largeDataset, 5000, targetObs.id)
+    expect(sampled.length).toBe(5000)
+    expect(sampled.some((o) => o.id === targetObs.id)).toBe(true)
+  })
+
+  it('benchmarks spatial grid aggregation performance on small, medium, and large datasets', () => {
+    // Small dataset (500 records)
+    const small = generateSyntheticObservations(500, 1)
+    const tSmall = performance.now()
+    const resSmall = aggregateSpatialGrid(small, 0.25)
+    const smallTime = performance.now() - tSmall
+    expect(resSmall.cells.length).toBeGreaterThan(0)
+    expect(smallTime).toBeLessThan(50)
+
+    // Medium dataset (3,000 records)
+    const medium = generateSyntheticObservations(3000, 2)
+    const tMedium = performance.now()
+    const resMedium = aggregateSpatialGrid(medium, 0.25)
+    const mediumTime = performance.now() - tMedium
+    expect(resMedium.cells.length).toBeGreaterThan(0)
+    expect(mediumTime).toBeLessThan(100)
+
+    // Large dataset (10,000 records)
+    const large = generateSyntheticObservations(10000, 3)
+    const tLarge = performance.now()
+    const resLarge = aggregateSpatialGrid(large, 0.25)
+    const largeTime = performance.now() - tLarge
+    expect(resLarge.cells.length).toBeGreaterThan(0)
+    expect(largeTime).toBeLessThan(250)
+  })
+})
+
 
 

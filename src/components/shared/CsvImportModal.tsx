@@ -48,9 +48,8 @@ export function CsvImportModal() {
   const [isDragging, setIsDragging] = useState(false)
 
   // NASA FIRMS Live API state
-  const envKey = (import.meta.env.VITE_NASA_FIRMS_MAP_KEY as string | undefined) ?? ''
   const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
-  const [apiKey, setApiKey] = useState(envKey)
+  const [apiKey, setApiKey] = useState('')
   const [apiSource, setApiSource] = useState<'VIIRS_SNPP_NRT' | 'MODIS_NRT' | 'VIIRS_NOAA20_NRT'>('VIIRS_SNPP_NRT')
   const [apiDays, setApiDays] = useState<number>(3)
   const [isLoadingApi, setIsLoadingApi] = useState(false)
@@ -122,37 +121,40 @@ export function CsvImportModal() {
     setIsCsvModalOpen(false)
   }
 
-  // Fetch live NASA FIRMS API
+  // Fetch live NASA FIRMS API via secure server proxy
   const handleFetchFromNasaApi = async () => {
-    const cleanKey = apiKey.trim()
-    if (!cleanKey) {
-      setStatusMessage({
-        type: 'error',
-        text: 'Please enter your NASA FIRMS MAP_KEY (32-character key from NASA).',
-      })
-      return
-    }
-
     setIsLoadingApi(true)
     setStatusMessage(null)
 
     try {
-      // Call through the proxy (or configurable backend) to avoid CORS
-      // NASA FIRMS recommends area bounding box queries (west,south,east,north) for India (68,8,97,37)
+      // Call through the server proxy to avoid CORS and protect API credentials
       const daysCount = Math.min(5, Math.max(1, apiDays))
-      const endpoint = `${apiBaseUrl}/api/firms/area/csv/${cleanKey}/${apiSource}/68,8,97,37/${daysCount}`
-      const response = await fetch(endpoint)
+      const endpoint = `${apiBaseUrl}/api/firms/live?source=${apiSource}&days=${daysCount}&area=68,8,97,37`
+
+      const headers: Record<string, string> = {}
+      const cleanKey = apiKey.trim()
+      if (cleanKey) {
+        headers['x-firms-map-key'] = cleanKey
+      }
+
+      const response = await fetch(endpoint, { headers })
 
       if (!response.ok) {
-        throw new Error(
-          `NASA FIRMS API returned HTTP ${response.status}: ${response.statusText}`,
-        )
+        let errorMsg = `HTTP ${response.status}: ${response.statusText}`
+        try {
+          const errData = await response.json()
+          if (errData.error) errorMsg = errData.error
+        } catch {
+          const errText = await response.text()
+          if (errText) errorMsg = errText
+        }
+        throw new Error(errorMsg)
       }
 
       const text = await response.text()
 
       // Check if NASA returned an error string instead of CSV
-      if (text.includes('Invalid MAP_KEY') || text.includes('Error:')) {
+      if (text.includes('Invalid MAP_KEY') || text.startsWith('Error:')) {
         throw new Error(text.trim())
       }
 
@@ -165,7 +167,7 @@ export function CsvImportModal() {
         throw new Error(parsed.error || 'No valid observation rows returned by NASA for India.')
       }
 
-      const applyRes = importCsvContent(text, fetchFileName)
+      const applyRes = importCsvContent(text, fetchFileName, 'firms-live-api')
       if (applyRes.success) {
         setIsCsvModalOpen(false)
       } else {
@@ -175,7 +177,7 @@ export function CsvImportModal() {
       const msg = err instanceof Error ? err.message : String(err)
       setStatusMessage({
         type: 'error',
-        text: `NASA API Error: ${msg}. Make sure your MAP_KEY is active or use the extracted CSV files from your DL_FIRE folders.`,
+        text: `NASA API Error: ${msg}. Configure NASA_FIRMS_MAP_KEY on your server or enter an active MAP_KEY.`,
       })
     } finally {
       setIsLoadingApi(false)
@@ -356,22 +358,19 @@ export function CsvImportModal() {
               <div className="rounded-lg border border-line bg-ink-950 p-3.5 space-y-2 text-xs">
                 <div className="flex items-center gap-2 text-fg font-semibold">
                   <Key className="size-4 text-signal-400" />
-                  <span>Where to Place Your NASA FIRMS MAP_KEY:</span>
+                  <span>NASA FIRMS API Key Configuration:</span>
                 </div>
                 <p className="text-fg-muted leading-relaxed text-[11px]">
-                  You have two ways to use your NASA FIRMS MAP_KEY:
+                  Requests are securely routed through the server-side proxy so secrets are never exposed in client bundles.
                 </p>
                 <ol className="list-decimal pl-4 space-y-1 text-[11px] text-fg-faint">
                   <li>
-                    <strong className="text-fg">In your environment file:</strong> Open or create{' '}
-                    <code className="text-ember-400">e:\Nasa\PyroLens_Part1\pyrolens\.env</code> and add:
-                    <br />
-                    <code className="font-mono text-fg bg-ink-900 px-1 py-0.5 rounded">
-                      VITE_NASA_FIRMS_MAP_KEY=your_32_char_key_here
-                    </code>
+                    <strong className="text-fg">Server environment (Recommended):</strong> Configure{' '}
+                    <code className="text-ember-400">NASA_FIRMS_MAP_KEY</code> in your server environment or{' '}
+                    <code className="text-ember-400">.env</code> file. No key entry is required below.
                   </li>
                   <li>
-                    <strong className="text-fg">Directly below in this dialog:</strong> Paste your key below to fetch live observations for India right now.
+                    <strong className="text-fg">Session key override:</strong> If not configured on the server, you may enter a 32-character key below for this session.
                   </li>
                 </ol>
               </div>
@@ -380,14 +379,14 @@ export function CsvImportModal() {
               <div className="space-y-3 rounded-xl border border-line-strong bg-ink-950/70 p-4 text-xs">
                 <div>
                   <label htmlFor="map-key-input" className="block text-xs font-semibold text-fg mb-1">
-                    NASA FIRMS MAP_KEY (32 characters)
+                    NASA FIRMS MAP_KEY (Optional session override)
                   </label>
                   <input
                     type="password"
                     id="map-key-input"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="e.g. 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d"
+                    placeholder="Leave blank to use server NASA_FIRMS_MAP_KEY"
                     className="w-full font-mono text-xs rounded-lg border border-line-strong bg-ink-900 px-3 py-2 text-fg placeholder:text-fg-faint focus:border-signal-400 focus:outline-none"
                   />
                   <p className="text-[10px] text-fg-faint mt-1">

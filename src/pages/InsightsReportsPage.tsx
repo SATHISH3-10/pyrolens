@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import {
   Activity,
   AlertTriangle,
@@ -31,6 +31,7 @@ import {
   aggregateByDate,
   aggregateByRegion,
   aggregateSpatialGrid,
+  filterObservations,
 } from '@/utils/aggregation'
 import {
   ANOMALY_SCIENTIFIC_DISCLAIMER,
@@ -46,8 +47,16 @@ import {
 } from '@/utils/exportUtils'
 
 export default function InsightsReportsPage() {
-  const { filteredObservations, summaryMetrics, filter, metadata } =
-    useFireData()
+  const navigate = useNavigate()
+  const {
+    filteredObservations,
+    observations,
+    summaryMetrics,
+    filter,
+    setFilter,
+    metadata,
+    customAoi,
+  } = useFireData()
 
   // Anomaly multiplier configuration: 2.0x (Sensitive), 2.5x (Standard), 3.0x (Extreme)
   const [thresholdMultiplier, setThresholdMultiplier] = useState<number>(2.5)
@@ -56,13 +65,47 @@ export default function InsightsReportsPage() {
   const dailyData = useMemo(() => aggregateByDate(filteredObservations, filter.gridResolution), [filteredObservations, filter.gridResolution])
   const regionData = useMemo(() => aggregateByRegion(filteredObservations, filter.gridResolution), [filteredObservations, filter.gridResolution])
 
-  // Statistical anomaly detection report (respects primary analysis metric)
+  // Broader reference baseline: observations matching the active AOI and sensor across the entire available dataset date range
+  const aoiReferenceBaseline = useMemo(() => {
+    return filterObservations(observations, {
+      ...filter,
+      startDate: '',
+      endDate: '',
+      customAoi,
+    })
+  }, [observations, filter, customAoi])
+
+  // Statistical anomaly detection report (respects primary analysis metric and broader AOI baseline)
   const anomalyReport = useMemo(() => {
     return detectUnusualActivity(filteredObservations, {
       thresholdMultiplier,
       metricType: filter.metricType,
+      referenceRecords: aoiReferenceBaseline,
+      baselinePeriodLabel:
+        filter.startDate && filter.endDate ? 'Historical AOI Baseline' : 'Full AOI Baseline',
     })
-  }, [filteredObservations, thresholdMultiplier, filter.metricType])
+  }, [
+    filteredObservations,
+    aoiReferenceBaseline,
+    thresholdMultiplier,
+    filter.metricType,
+    filter.startDate,
+    filter.endDate,
+  ])
+
+  // Task F: Handle anomaly inspect navigation to Fire Explorer with preserved context
+  const handleInspectAnomaly = (anomalyDate: string) => {
+    setFilter({
+      startDate: anomalyDate,
+      endDate: anomalyDate,
+    })
+    navigate('/explorer', {
+      state: {
+        inspectedDate: anomalyDate,
+        fromAnomaly: true,
+      },
+    })
+  }
 
   // Export handlers
   const handleExportObservations = () => {
@@ -293,14 +336,15 @@ export default function InsightsReportsPage() {
                         {anom.explanation}
                       </td>
                       <td className="py-2.5 px-3 text-right">
-                        <Link
-                          to="/explorer"
-                          className="inline-flex items-center gap-1 text-signal-400 hover:text-signal-300 font-medium"
-                          title="View on Map"
+                        <button
+                          type="button"
+                          onClick={() => handleInspectAnomaly(anom.date)}
+                          className="inline-flex items-center gap-1 text-signal-400 hover:text-signal-300 font-medium transition-colors"
+                          title={`Inspect ${anom.date} anomaly hotspots on map`}
                         >
                           <MapPin className="size-3" />
                           <span>Inspect</span>
-                        </Link>
+                        </button>
                       </td>
                     </tr>
                   ))}

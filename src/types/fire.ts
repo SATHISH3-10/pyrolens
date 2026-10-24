@@ -236,6 +236,8 @@ export interface MultiYearMonthData {
   avgFrp: number | null
   activeDaysCount: number
   isPartial: boolean
+  hasCoverage: boolean
+  status: 'available' | 'no_data' | 'partial'
   firstObsDate?: string
   lastObsDate?: string
 }
@@ -245,11 +247,78 @@ export interface MultiYearDayData {
   byYear: Record<
     number,
     {
-      value: number
-      rawCount: number
-      harmonizedCells: number
+      value: number | null
+      rawCount: number | null
+      harmonizedCells: number | null
       hasData: boolean
+      status: 'observed_active' | 'observed_zero' | 'no_coverage' | 'leap_day'
       isLeapDay?: boolean
     }
   >
+}
+
+export interface CriticalPeriodWeek {
+  weekNumber: number // 1..52
+  label: string // e.g. "Week 12 (Mid-March)"
+  monthNumber: number // 1..12
+  historicalMeanActiveCells: number
+  historicalMedianActiveCells: number
+  historicalMaxActiveCells: number
+  totalDetections: number
+  observedYearsCount: number
+  isCritical: boolean
+  isCriticalPeriod: boolean
+  criticalityTier: 'extreme' | 'high' | 'moderate' | 'baseline'
+}
+
+export interface CriticalPeriodsReport {
+  status: 'sufficient' | 'insufficient_history' | 'no_data' | 'ok'
+  thresholdPercentile: number // e.g. 75
+  percentileThreshold: number
+  thresholdCutoffValue: number
+  thresholdValue: number
+  minSampleYearsRequired: number
+  sampleYearsAvailable: number
+  totalYearsAnalyzed: number
+  criticalWeeks: CriticalPeriodWeek[]
+  allWeeks: CriticalPeriodWeek[]
+  peakSeasonSummary: string
+  disclaimer: string
+}
+
+export type AdvisoryLevel =
+  | 'critical_season_active'
+  | 'critical_season_approaching'
+  | 'moderate_monitoring'
+  | 'low_activity_season'
+  | 'insufficient_history'
+  | 'INSUFFICIENT_DATA'
+  | 'ELEVATED'
+  | 'HIGH'
+  | 'EXTREME'
+  | 'LOW'
+
+export interface MonitoringAdvisory {
+  status: 'ok' | 'active' | 'insufficient_data' | 'insufficient_history' | 'no_data'
+  level: AdvisoryLevel
+  title: string
+  summary: string
+  referenceDate: string
+  upcomingWindowDays: number
+  upcomingWindowLabel: string
+  historicalBasis: {
+    aoiName: string
+    sensor: string
+    yearsAnalyzed: number[]
+    analyzedYearsCount: number
+    historicalActivePeriods: number
+    comparablePeriodsCount: number
+    historicalAvgActiveCells: number
+    historicalPeakActiveCells: number
+    peakWeekLabel: string
+    datasetDateRange: { start: string; end: string }
+  }
+  recommendedActions: string[]
+  limitations: string[]
+  limitationsNotice: string
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Calendar,
@@ -10,6 +10,7 @@ import {
   MapPin,
   ShieldAlert,
   Sparkles,
+  TrendingUp,
 } from 'lucide-react'
 import { useFireData } from '@/context/FireDataContext'
 import { FilterBar } from '@/components/shared/FilterBar'
@@ -18,7 +19,11 @@ import {
   aggregateByDate,
   aggregateByMonth,
   aggregateMultiYearMonth,
+  filterObservations,
+  getWeekOfYear,
+  identifyCriticalPeriods,
 } from '@/utils/aggregation'
+import { detectUnusualActivity } from '@/utils/anomalyDetection'
 
 const MONTH_NAMES = [
   'January',
@@ -39,28 +44,177 @@ const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export default function HistoricalCalendarPage() {
   const navigate = useNavigate()
-  const { filteredObservations, filter, setFilter } = useFireData()
+  const {
+    filteredObservations,
+    observations,
+    metadata,
+    filter,
+    setFilter,
+    customAoi,
+  } = useFireData()
 
-  // Calendar view state: Year and Month
-  const [viewYear, setViewYear] = useState(2024)
-  const [viewMonth, setViewMonth] = useState(3) // March default
-  const [multiYearMonth, setMultiYearMonth] = useState(3) // Target month for Year-over-Year comparison
+  // Calendar view state: dynamically initialize from active filter or available records
+  const [viewYear, setViewYear] = useState<number>(() => {
+    const d =
+      filter.startDate ||
+      (filteredObservations.length > 0
+        ? filteredObservations[filteredObservations.length - 1]!.acqDate
+        : observations.length > 0
+          ? observations[observations.length - 1]!.acqDate
+          : metadata.dateRange.end || '2024-03-15')
+    const y = parseInt(d.slice(0, 4), 10)
+    return !isNaN(y) ? y : 2024
+  })
+
+  const [viewMonth, setViewMonth] = useState<number>(() => {
+    const d =
+      filter.startDate ||
+      (filteredObservations.length > 0
+        ? filteredObservations[filteredObservations.length - 1]!.acqDate
+        : observations.length > 0
+          ? observations[observations.length - 1]!.acqDate
+          : metadata.dateRange.end || '2024-03-15')
+    const m = parseInt(d.slice(5, 7), 10)
+    return !isNaN(m) ? m : 3
+  })
+
+  const [multiYearMonth, setMultiYearMonth] = useState<number>(() => {
+    const d =
+      filter.startDate ||
+      (filteredObservations.length > 0
+        ? filteredObservations[filteredObservations.length - 1]!.acqDate
+        : observations.length > 0
+          ? observations[observations.length - 1]!.acqDate
+          : metadata.dateRange.end || '2024-03-15')
+    const m = parseInt(d.slice(5, 7), 10)
+    return !isNaN(m) ? m : 3
+  })
+
   const [viewMode, setViewMode] = useState<'daily' | 'multiyear' | 'monthly'>('daily')
-  const [selectedDate, setSelectedDate] = useState<string | null>('2024-03-18')
+  const [selectedDate, setSelectedDate] = useState<string | null>(() => {
+    if (filter.startDate) return filter.startDate
+    if (filteredObservations.length > 0) return filteredObservations[0]!.acqDate
+    return null
+  })
+
+  const [criticalThresholdPercentile, setCriticalThresholdPercentile] = useState<number>(75)
+
+  // Task E: Synchronize calendar view when global filter.startDate changes externally
+  useEffect(() => {
+    if (filter.startDate) {
+      const y = parseInt(filter.startDate.slice(0, 4), 10)
+      const m = parseInt(filter.startDate.slice(5, 7), 10)
+      if (!isNaN(y) && !isNaN(m)) {
+        setViewYear(y)
+        setViewMonth(m)
+        setMultiYearMonth(m)
+        setSelectedDate(filter.startDate)
+      }
+    } else if (observations.length > 0) {
+      const latest = observations[observations.length - 1]!.acqDate
+      const y = parseInt(latest.slice(0, 4), 10)
+      const m = parseInt(latest.slice(5, 7), 10)
+      if (!isNaN(y) && !isNaN(m)) {
+        setViewYear(y)
+        setViewMonth(m)
+        setMultiYearMonth(m)
+      }
+    }
+  }, [filter.startDate, observations])
+
+  // Multi-year observations matching active AOI and sensor filters (unconstrained by narrow calendar date clipping)
+  const aoiHistoricalObservations = useMemo(() => {
+    return filterObservations(observations, {
+      ...filter,
+      startDate: '',
+      endDate: '',
+      customAoi,
+    })
+  }, [observations, filter, customAoi])
+
+  // Determine observation date bounds
+  const datasetBounds = useMemo(() => {
+    const records =
+      aoiHistoricalObservations.length > 0 ? aoiHistoricalObservations : filteredObservations
+    if (records.length === 0) return null
+    let min = records[0]!.acqDate
+    let max = records[0]!.acqDate
+    for (const o of records) {
+      if (o.acqDate < min) min = o.acqDate
+      if (o.acqDate > max) max = o.acqDate
+    }
+    return { min, max }
+  }, [aoiHistoricalObservations, filteredObservations])
 
   // Date aggregates across active filters
-  const dailyData = useMemo(() => aggregateByDate(filteredObservations), [filteredObservations])
-  const monthlyData = useMemo(() => aggregateByMonth(filteredObservations), [filteredObservations])
+  const dailyData = useMemo(() => {
+    const records =
+      aoiHistoricalObservations.length > 0 ? aoiHistoricalObservations : filteredObservations
+    return aggregateByDate(records, filter.gridResolution)
+  }, [aoiHistoricalObservations, filteredObservations, filter.gridResolution])
+
+  const monthlyData = useMemo(() => {
+    const records =
+      aoiHistoricalObservations.length > 0 ? aoiHistoricalObservations : filteredObservations
+    return aggregateByMonth(records, filter.gridResolution)
+  }, [aoiHistoricalObservations, filteredObservations, filter.gridResolution])
+
+  // Task B: Historical critical-period identification engine
+  const criticalReport = useMemo(() => {
+    const records =
+      aoiHistoricalObservations.length > 0 ? aoiHistoricalObservations : filteredObservations
+    return identifyCriticalPeriods(records, {
+      thresholdPercentile: criticalThresholdPercentile,
+      metricType: filter.metricType,
+      gridResolution: filter.gridResolution,
+      minSampleYearsRequired: 2,
+    })
+  }, [
+    aoiHistoricalObservations,
+    filteredObservations,
+    criticalThresholdPercentile,
+    filter.metricType,
+    filter.gridResolution,
+  ])
+
+  const criticalWeeksMap = useMemo(() => {
+    const map = new Map<number, (typeof criticalReport.allWeeks)[0]>()
+    for (const w of criticalReport.allWeeks) {
+      map.set(w.weekNumber, w)
+    }
+    return map
+  }, [criticalReport.allWeeks])
+
+  // Statistical anomaly detection for independent anomaly comparison
+  const anomalyReport = useMemo(() => {
+    return detectUnusualActivity(filteredObservations, {
+      metricType: filter.metricType,
+      referenceRecords: aoiHistoricalObservations,
+      baselinePeriodLabel: 'AOI Baseline',
+    })
+  }, [filteredObservations, aoiHistoricalObservations, filter.metricType])
+
+  const anomalyDateSet = useMemo(() => {
+    return new Set(anomalyReport.anomalies.map((a) => a.date))
+  }, [anomalyReport.anomalies])
 
   // Multi-year comparative dataset for target month
   const multiYearData = useMemo(() => {
+    const records =
+      aoiHistoricalObservations.length > 0 ? aoiHistoricalObservations : filteredObservations
     return aggregateMultiYearMonth(
-      filteredObservations,
+      records,
       multiYearMonth,
       filter.metricType,
       filter.gridResolution,
     )
-  }, [filteredObservations, multiYearMonth, filter.metricType, filter.gridResolution])
+  }, [
+    aoiHistoricalObservations,
+    filteredObservations,
+    multiYearMonth,
+    filter.metricType,
+    filter.gridResolution,
+  ])
 
   // Map of date string -> daily aggregate
   const dateMap = useMemo(() => {
@@ -71,7 +225,7 @@ export default function HistoricalCalendarPage() {
     return map
   }, [dailyData])
 
-  // Days in selected view month
+  // Days in selected view month with coverage and critical period awareness
   const calendarCells = useMemo(() => {
     const firstDayOfWeek = new Date(viewYear, viewMonth - 1, 1).getDay()
     const daysInCurrentMonth = new Date(viewYear, viewMonth, 0).getDate()
@@ -79,10 +233,14 @@ export default function HistoricalCalendarPage() {
     const cells: Array<{
       dayNumber: number | null
       dateStr: string | null
-      total: number
+      total: number | null
       modis: number
       viirs: number
       avgFrp: number | null
+      hasCoverage: boolean
+      isCriticalPeriod: boolean
+      criticalityTier: string
+      isAnomaly: boolean
     }> = []
 
     // Padding empty cells before the 1st
@@ -90,40 +248,61 @@ export default function HistoricalCalendarPage() {
       cells.push({
         dayNumber: null,
         dateStr: null,
-        total: 0,
+        total: null,
         modis: 0,
         viirs: 0,
         avgFrp: null,
+        hasCoverage: false,
+        isCriticalPeriod: false,
+        criticalityTier: 'baseline',
+        isAnomaly: false,
       })
     }
 
     // Days 1 through N
     for (let d = 1; d <= daysInCurrentMonth; d++) {
       const dateStr = `${viewYear}-${String(viewMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+      const hasCoverage = Boolean(
+        datasetBounds &&
+          dateStr >= datasetBounds.min &&
+          dateStr <= datasetBounds.max,
+      )
       const record = dateMap.get(dateStr)
+      const weekNum = getWeekOfYear(dateStr)
+      const weekEntry = criticalWeeksMap.get(weekNum)
+      const isCriticalPeriod = Boolean(weekEntry?.isCriticalPeriod)
+      const criticalityTier = weekEntry?.criticalityTier ?? 'baseline'
+      const isAnomaly = anomalyDateSet.has(dateStr)
+
       cells.push({
         dayNumber: d,
         dateStr,
-        total: record?.total ?? 0,
+        total: hasCoverage ? (record?.total ?? 0) : null,
         modis: record?.modis ?? 0,
         viirs: record?.viirs ?? 0,
         avgFrp: record?.avgFrp ?? null,
+        hasCoverage,
+        isCriticalPeriod,
+        criticalityTier,
+        isAnomaly,
       })
     }
 
     return cells
-  }, [viewYear, viewMonth, dateMap])
+  }, [viewYear, viewMonth, dateMap, datasetBounds, criticalWeeksMap, anomalyDateSet])
 
-  // Month summary metrics
+  // Month summary metrics respecting missing data vs zero activity
   const monthTotals = useMemo(() => {
     let total = 0
     let modis = 0
     let viirs = 0
     let activeDays = 0
+    let observedDays = 0
     let peakDay = { date: '', total: 0 }
 
     for (const cell of calendarCells) {
-      if (!cell.dateStr) continue
+      if (!cell.dateStr || cell.total === null) continue
+      observedDays++
       total += cell.total
       modis += cell.modis
       viirs += cell.viirs
@@ -133,7 +312,9 @@ export default function HistoricalCalendarPage() {
       }
     }
 
-    return { total, modis, viirs, activeDays, peakDay }
+    const monthHasCoverage = observedDays > 0
+
+    return { total, modis, viirs, activeDays, observedDays, peakDay, monthHasCoverage }
   }, [calendarCells])
 
   // Selected date record
@@ -167,10 +348,25 @@ export default function HistoricalCalendarPage() {
     navigate('/explorer')
   }
 
-  // Heatmap intensity classifier
-  const getCellIntensityStyle = (count: number, isSelected: boolean) => {
+  // Enhanced cell style classifier supporting 4 key states
+  const getCellStateStyle = (
+    count: number | null,
+    hasCoverage: boolean,
+    isSelected: boolean,
+    isAnomaly: boolean,
+    isCriticalPeriod: boolean,
+  ) => {
     if (isSelected) {
       return 'border-white ring-2 ring-white/50 bg-ink-700'
+    }
+    if (!hasCoverage || count === null) {
+      return 'border-line/20 bg-ink-950/40 text-fg-faint/40'
+    }
+    if (isAnomaly) {
+      return 'border-rose-500/80 bg-rose-500/20 text-rose-200 ring-1 ring-rose-500/40 font-bold'
+    }
+    if (isCriticalPeriod && count > 0) {
+      return 'border-ember-400/70 bg-ember-500/30 text-ember-100 ring-1 ring-ember-500/40 font-semibold'
     }
     if (count === 0) {
       return 'border-line/40 bg-ink-950/70 text-fg-faint'
@@ -220,6 +416,72 @@ export default function HistoricalCalendarPage() {
           </p>
         </div>
       </div>
+
+      {/* Task B: Historical Critical Periods & Climatological Baseline Card */}
+      <Card padding="sm" className="border-signal-400/30 bg-ink-900/80">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="size-4 text-ember-400" />
+            <div>
+              <h3 className="font-semibold text-sm text-fg">
+                Historical Critical-Period Analysis (Climatological Baseline)
+              </h3>
+              <p className="text-[11px] text-fg-faint">
+                Identifies recurring seasonal burning peaks based on weekly percentiles across historical observations.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-fg-muted font-medium">Critical Threshold:</span>
+            <select
+              value={criticalThresholdPercentile}
+              onChange={(e) => setCriticalThresholdPercentile(Number(e.target.value))}
+              className="rounded-lg border border-line bg-ink-800 px-2.5 py-1 text-fg focus:outline-none focus:border-ember-500"
+            >
+              <option value={70}>70th Percentile</option>
+              <option value={75}>75th Percentile (Standard)</option>
+              <option value={80}>80th Percentile (Elevated)</option>
+              <option value={90}>90th Percentile (Extreme Only)</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 md:grid-cols-4 text-xs">
+          <div className="rounded-lg border border-line bg-ink-950 p-2.5">
+            <span className="text-fg-faint text-[11px] block">Critical Weeks Identified</span>
+            <p className="mt-1 text-lg font-bold text-ember-400">
+              {criticalReport.criticalWeeks.length} weeks{' '}
+              <span className="text-xs font-normal text-fg-faint">/ 52</span>
+            </p>
+            <span className="text-[10px] text-fg-faint">
+              &ge; {criticalReport.thresholdCutoffValue} active cells/week
+            </span>
+          </div>
+
+          <div className="rounded-lg border border-line bg-ink-950 p-2.5">
+            <span className="text-fg-faint text-[11px] block">Observed History Sample</span>
+            <p className="mt-1 text-lg font-bold text-signal-400">
+              {criticalReport.sampleYearsAvailable} year(s)
+            </p>
+            <span className="text-[10px] text-fg-faint">
+              Required minimum: {criticalReport.minSampleYearsRequired} year
+            </span>
+          </div>
+
+          <div className="rounded-lg border border-line bg-ink-950 p-2.5 md:col-span-2">
+            <span className="text-fg-faint text-[11px] block">Peak Seasonal Clustering</span>
+            <p className="mt-1 text-xs text-fg leading-relaxed">
+              {criticalReport.peakSeasonSummary}
+            </p>
+          </div>
+        </div>
+
+        <p className="mt-3 text-[11px] text-fg-faint border-t border-line/40 pt-2 leading-relaxed">
+          <strong className="text-fg-muted">Climatological Distinction: </strong>
+          {criticalReport.disclaimer}
+        </p>
+      </Card>
 
       {/* View Mode & Calendar Controls Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-line bg-ink-900/90 px-4 py-3 text-xs">
@@ -323,46 +585,69 @@ export default function HistoricalCalendarPage() {
           <Card padding="sm">
             <span className="text-fg-muted block">Month Total Hotspots</span>
             <p className="mt-1 text-2xl font-bold text-fg">
-              {monthTotals.total.toLocaleString()}
+              {monthTotals.monthHasCoverage ? monthTotals.total.toLocaleString() : '—'}
             </p>
             <p className="mt-0.5 text-[11px] text-fg-faint">
-              In {MONTH_NAMES[viewMonth - 1]} {viewYear}
+              {monthTotals.monthHasCoverage
+                ? `In ${MONTH_NAMES[viewMonth - 1]} ${viewYear}`
+                : `No satellite records in ${MONTH_NAMES[viewMonth - 1]} ${viewYear}`}
             </p>
           </Card>
 
           <Card padding="sm">
             <span className="text-fg-muted block">Active vs. Zero Days</span>
             <p className="mt-1 text-2xl font-bold text-fg">
-              {monthTotals.activeDays} <span className="text-sm font-normal text-fg-faint">/ 31 days</span>
+              {monthTotals.monthHasCoverage ? (
+                <>
+                  {monthTotals.activeDays}{' '}
+                  <span className="text-sm font-normal text-fg-faint">
+                    / {monthTotals.observedDays} observed days
+                  </span>
+                </>
+              ) : (
+                <span className="text-fg-faint text-lg">No coverage</span>
+              )}
             </p>
             <p className="mt-0.5 text-[11px] text-fg-faint">
-              {31 - monthTotals.activeDays} days with 0 detected anomalies
+              {monthTotals.monthHasCoverage
+                ? `${monthTotals.observedDays - monthTotals.activeDays} days with 0 detected anomalies`
+                : 'Period not covered by archive records'}
             </p>
           </Card>
 
           <Card padding="sm">
             <span className="text-fg-muted block">Sensor Breakdown</span>
             <div className="mt-1 flex items-baseline gap-2">
-              <span className="text-lg font-bold text-ember-400">{monthTotals.modis}</span>
+              <span className="text-lg font-bold text-ember-400">
+                {monthTotals.monthHasCoverage ? monthTotals.modis : '—'}
+              </span>
               <span className="text-[11px] text-fg-faint">MODIS</span>
               <span className="text-fg-faint">·</span>
-              <span className="text-lg font-bold text-signal-400">{monthTotals.viirs}</span>
+              <span className="text-lg font-bold text-signal-400">
+                {monthTotals.monthHasCoverage ? monthTotals.viirs : '—'}
+              </span>
               <span className="text-[11px] text-fg-faint">VIIRS</span>
             </div>
             <p className="mt-0.5 text-[11px] text-fg-faint">
-              VIIRS 375m captures finer sub-pixel anomalies
+              {monthTotals.monthHasCoverage
+                ? 'VIIRS 375m captures finer sub-pixel anomalies'
+                : 'Awaiting sensor archive data'}
             </p>
           </Card>
 
           <Card padding="sm">
             <span className="text-fg-muted block">Peak Activity Day</span>
             <p className="mt-1 text-lg font-bold text-ember-400">
-              {monthTotals.peakDay.date || 'None'}
+              {monthTotals.monthHasCoverage && monthTotals.peakDay.total > 0
+                ? monthTotals.peakDay.date
+                : 'None'}
             </p>
             <p className="mt-0.5 text-[11px] text-fg-faint">
-              {monthTotals.peakDay.total > 0
-                ? `${monthTotals.peakDay.total} hotspots in a single day`
-                : 'No detections'}
+              {monthTotals.monthHasCoverage
+                ? monthTotals.peakDay.total > 0
+                  ? `${monthTotals.peakDay.total} hotspots in a single day`
+                  : 'Zero detections during monitored period'
+                : 'No observations available'}
             </p>
           </Card>
         </div>
@@ -397,7 +682,13 @@ export default function HistoricalCalendarPage() {
                   }
 
                   const isSelected = cell.dateStr === selectedDate
-                  const intensityClass = getCellIntensityStyle(cell.total, isSelected)
+                  const intensityClass = getCellStateStyle(
+                    cell.total,
+                    cell.hasCoverage,
+                    isSelected,
+                    cell.isAnomaly,
+                    cell.isCriticalPeriod,
+                  )
 
                   return (
                     <button
@@ -408,13 +699,35 @@ export default function HistoricalCalendarPage() {
                     >
                       <div className="flex items-center justify-between w-full">
                         <span className="text-xs font-semibold">{cell.dayNumber}</span>
-                        {cell.total > 0 && (
-                          <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-                        )}
+                        <div className="flex items-center gap-1">
+                          {cell.isAnomaly && (
+                            <span
+                              className="text-[9px] font-bold px-1 rounded bg-rose-500/30 text-rose-300 border border-rose-500/40"
+                              title="Statistical Anomaly Surge (> 2.5x MAD)"
+                            >
+                              ANOM
+                            </span>
+                          )}
+                          {!cell.isAnomaly && cell.isCriticalPeriod && cell.hasCoverage && (
+                            <span
+                              className="text-[9px] font-semibold px-1 rounded bg-ember-500/20 text-ember-300 border border-ember-500/30"
+                              title="Historical Critical Period (≥ 75th percentile of historical weeks)"
+                            >
+                              CP
+                            </span>
+                          )}
+                          {cell.total !== null && cell.total > 0 && (
+                            <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+                          )}
+                        </div>
                       </div>
 
                       <div className="w-full">
-                        {cell.total > 0 ? (
+                        {!cell.hasCoverage ? (
+                          <span className="text-[10px] text-fg-faint/40 italic" title="No satellite observations available">
+                            —
+                          </span>
+                        ) : cell.total !== null && cell.total > 0 ? (
                           <>
                             <div className="text-sm font-bold tracking-tight">
                               {cell.total}
@@ -432,19 +745,19 @@ export default function HistoricalCalendarPage() {
                 })}
               </div>
 
-              {/* Heatmap Legend */}
+              {/* Heatmap & Climatology Legend */}
               <div
                 role="note"
-                aria-label="Calendar heatmap legend"
+                aria-label="Calendar activity and critical periods legend"
                 className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-3 text-xs text-fg-muted"
               >
                 <div className="flex items-center gap-1.5 font-medium">
                   <Flame className="size-3.5 text-ember-400" />
-                  <span>Activity Legend:</span>
+                  <span>Activity &amp; Critical Legend:</span>
                 </div>
 
-                <div className="flex items-center gap-2 text-[11px]">
-                  <div className="flex items-center gap-1">
+                <div className="flex flex-wrap items-center gap-2.5 text-[11px]">
+                  <div className="flex items-center gap-1" title="Confirmed zero active thermal anomalies detected during monitored passes">
                     <span className="size-3 rounded border border-line bg-ink-950" />
                     <span>0 Hotspots</span>
                   </div>
@@ -464,6 +777,18 @@ export default function HistoricalCalendarPage() {
                     <span className="size-3 rounded border border-ember-400 bg-ember-500" />
                     <span className="font-semibold text-fg">30+ (Peak)</span>
                   </div>
+                  <div className="flex items-center gap-1" title="Historically high active period (≥ 75th percentile of historical calendar weeks)">
+                    <span className="rounded border border-ember-500/50 bg-ember-500/20 px-1 text-[10px] font-bold text-ember-300">CP</span>
+                    <span>Critical Period</span>
+                  </div>
+                  <div className="flex items-center gap-1" title="Statistical surge exceeding 2.5x MAD baseline">
+                    <span className="rounded border border-rose-500/60 bg-rose-500/20 px-1 text-[10px] font-bold text-rose-300">ANOM</span>
+                    <span>Anomaly</span>
+                  </div>
+                  <div className="flex items-center gap-1" title="No satellite observation records exist for this date in the archive">
+                    <span className="size-3 rounded border border-line/20 bg-ink-950/40 text-center leading-3 text-[10px] text-fg-faint/40">—</span>
+                    <span>No Data</span>
+                  </div>
                 </div>
               </div>
             </Card>
@@ -479,24 +804,50 @@ export default function HistoricalCalendarPage() {
                     Day Activity Details
                   </h3>
                 </div>
+                {selectedDate && (
+                  <span className="font-mono text-xs font-semibold text-fg-muted">
+                    {selectedDate}
+                  </span>
+                )}
               </div>
 
               {selectedDate ? (
                 <div className="space-y-4 text-xs">
-                  <div>
-                    <span className="text-[11px] text-fg-faint block">Selected Date</span>
-                    <p className="text-base font-bold text-fg">{selectedDate}</p>
-                  </div>
+                  {/* Contextual Status callouts */}
+                  {(() => {
+                    const wNum = getWeekOfYear(selectedDate)
+                    const wEntry = criticalWeeksMap.get(wNum)
+                    const isAnom = anomalyDateSet.has(selectedDate)
+                    return (
+                      <div className="space-y-1.5">
+                        {isAnom && (
+                          <div className="rounded-lg border border-rose-500/40 bg-rose-950/30 p-2 text-xs text-rose-200">
+                            <strong className="block text-rose-300 font-semibold">
+                              Statistical Anomaly Surge
+                            </strong>
+                            <span className="text-[11px] leading-tight">
+                              Thermal radiance on this date exceeded the median baseline by &gt; 2.5x MAD.
+                            </span>
+                          </div>
+                        )}
+                        {wEntry?.isCriticalPeriod && (
+                          <div className="rounded-lg border border-ember-500/40 bg-ember-950/30 p-2 text-xs text-ember-200">
+                            <strong className="block text-ember-300 font-semibold">
+                              Historical Critical Period (Week {wNum})
+                            </strong>
+                            <span className="text-[11px] leading-tight">
+                              Falls in the {wEntry.criticalityTier.toUpperCase()} seasonal tier (historically averaging {wEntry.historicalMeanActiveCells} active cells).
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
 
                   {selectedDayRecord ? (
                     <>
-                      <div className="rounded-lg border border-line bg-ink-950 p-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] text-fg-faint block">Detected Hotspots</span>
-                          <span className="text-[11px] font-semibold text-signal-300">
-                            Harmonized: {selectedDayRecord.harmonizedActiveCells} cells
-                          </span>
-                        </div>
+                      <div>
+                        <span className="text-fg-faint block">Observed Thermal Radiance</span>
                         <p className="text-2xl font-bold text-fg mt-0.5">
                           {selectedDayRecord.total}{' '}
                           <span className="text-xs font-normal text-fg-muted">observations</span>
@@ -549,12 +900,21 @@ export default function HistoricalCalendarPage() {
                         <span>Explore {selectedDate} on Map</span>
                       </button>
                     </>
+                  ) : datasetBounds &&
+                    selectedDate >= datasetBounds.min &&
+                    selectedDate <= datasetBounds.max ? (
+                    <div className="rounded-lg border border-line bg-ink-950 p-4 text-center space-y-2">
+                      <p className="font-semibold text-fg">Zero Detected Hotspots</p>
+                      <p className="text-[11px] text-fg-faint leading-relaxed">
+                        Satellite observations were conducted during this period, and zero thermal anomalies were detected.
+                        This may be due to heavy cloud cover, non-detection, or absence of surface fires.
+                      </p>
+                    </div>
                   ) : (
                     <div className="rounded-lg border border-line bg-ink-950 p-4 text-center space-y-2">
-                      <p className="font-semibold text-fg">Zero Thermal Anomaly Detections</p>
+                      <p className="font-semibold text-fg-muted">No Satellite Observations Available</p>
                       <p className="text-[11px] text-fg-faint leading-relaxed">
-                        No satellite hotspots were recorded for this day under the active filters.
-                        This may be due to heavy cloud cover, rain, non-detection, or absence of surface fires.
+                        No satellite active-fire observation passes or archive records exist for {selectedDate} in the current dataset.
                       </p>
                     </div>
                   )}
@@ -596,8 +956,12 @@ export default function HistoricalCalendarPage() {
               <Card key={ms.year} padding="sm" className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-sm text-fg">{ms.year}</span>
-                  {ms.isPartial && (
+                  {!ms.hasCoverage ? (
+                    <Badge tone="neutral">No Coverage</Badge>
+                  ) : ms.isPartial ? (
                     <Badge tone="ember">Partial</Badge>
+                  ) : (
+                    <Badge tone="ok">Observed</Badge>
                   )}
                 </div>
                 <div>
@@ -605,14 +969,16 @@ export default function HistoricalCalendarPage() {
                     {filter.metricType === 'harmonized' ? 'Active Cells' : 'Hotspots'}
                   </span>
                   <span className="text-xl font-bold text-ember-400">
-                    {filter.metricType === 'harmonized'
-                      ? ms.harmonizedActiveCells
-                      : ms.totalCount}
+                    {ms.hasCoverage
+                      ? filter.metricType === 'harmonized'
+                        ? ms.harmonizedActiveCells
+                        : ms.totalCount
+                      : '—'}
                   </span>
                 </div>
                 <div className="text-[10px] text-fg-faint space-y-0.5 border-t border-line/40 pt-1 mt-1">
-                  <div>M: {ms.modisCount} · V: {ms.viirsCount}</div>
-                  <div>Active Days: {ms.activeDaysCount}</div>
+                  <div>M: {ms.hasCoverage ? ms.modisCount : '—'} · V: {ms.hasCoverage ? ms.viirsCount : '—'}</div>
+                  <div>Active Days: {ms.hasCoverage ? ms.activeDaysCount : '—'}</div>
                   <div>Avg FRP: {ms.avgFrp !== null ? `${ms.avgFrp} MW` : 'N/A'}</div>
                 </div>
               </Card>
@@ -665,7 +1031,7 @@ export default function HistoricalCalendarPage() {
                         )
                       }
 
-                      if (entry.isLeapDay) {
+                      if (entry.isLeapDay || entry.status === 'leap_day') {
                         return (
                           <td
                             key={y}
@@ -677,8 +1043,20 @@ export default function HistoricalCalendarPage() {
                         )
                       }
 
+                      if (!entry.hasData || entry.status === 'no_coverage' || entry.value === null) {
+                        return (
+                          <td
+                            key={y}
+                            className="p-1 text-center text-[10px] text-fg-faint/40"
+                            title={`No satellite observations available for ${y}`}
+                          >
+                            —
+                          </td>
+                        )
+                      }
+
                       const val = entry.value
-                      const hasData = entry.hasData && val > 0
+                      const isObservedZero = entry.hasData && val === 0
                       const dateStr = `${y}-${String(multiYearMonth).padStart(2, '0')}-${String(row.dayOfMonth).padStart(2, '0')}`
 
                       return (
@@ -687,8 +1065,8 @@ export default function HistoricalCalendarPage() {
                             type="button"
                             onClick={() => handleExploreDayOnMap(dateStr)}
                             className={`w-full py-1 px-1 rounded font-mono text-[11px] transition-all hover:scale-105 ${
-                              !hasData
-                                ? 'bg-ink-950/60 text-fg-faint/60 hover:bg-ink-800 hover:text-fg'
+                              isObservedZero
+                                ? 'bg-ink-950/60 text-fg-faint/70 hover:bg-ink-800 hover:text-fg border border-line/40'
                                 : val <= 4
                                   ? 'bg-ember-500/15 text-ember-300 border border-ember-500/20'
                                   : val <= 14

@@ -726,18 +726,30 @@ export function aggregateMultiYearMonth(
   targetMonth: number,
   metricType: PrimaryMetricType = 'harmonized',
   gridResolution = 0.25,
+  coverageBounds?: { start: string; end: string },
 ): {
   years: number[]
   monthSummary: MultiYearMonthData[]
   days: MultiYearDayData[]
 } {
-  // Include standard multi-year comparison range 2020-2026 plus any data years
-  const dataYears = new Set<number>([2020, 2021, 2022, 2023, 2024, 2025, 2026])
+  // Determine actual years and date bounds with observation records
+  const yearsWithRecords = new Set<number>()
+  let datasetMinDate: string | undefined = coverageBounds?.start
+  let datasetMaxDate: string | undefined = coverageBounds?.end
+
   for (const obs of records) {
     const y = parseInt(obs.acqDate.slice(0, 4), 10)
-    if (!isNaN(y)) dataYears.add(y)
+    if (!isNaN(y)) yearsWithRecords.add(y)
+    if (!datasetMinDate || obs.acqDate < datasetMinDate) datasetMinDate = obs.acqDate
+    if (!datasetMaxDate || obs.acqDate > datasetMaxDate) datasetMaxDate = obs.acqDate
   }
-  const years = Array.from(dataYears).sort((a, b) => a - b)
+
+  // Include standard multi-year comparison range 2020-2026 plus any data years
+  const comparisonYears = new Set<number>([2020, 2021, 2022, 2023, 2024, 2025, 2026])
+  for (const y of yearsWithRecords) {
+    comparisonYears.add(y)
+  }
+  const years = Array.from(comparisonYears).sort((a, b) => a - b)
 
   // Map of year -> observations in targetMonth
   const yearRecordsMap = new Map<number, FireObservation[]>()
@@ -752,6 +764,13 @@ export function aggregateMultiYearMonth(
       yearRecordsMap.get(y)!.push(obs)
     }
   }
+
+  // Days in month: standard month length
+  const maxDays = [1, 3, 5, 7, 8, 10, 12].includes(targetMonth)
+    ? 31
+    : targetMonth === 2
+      ? 29
+      : 30
 
   // Compute month summaries
   const monthSummary: MultiYearMonthData[] = []
@@ -821,8 +840,26 @@ export function aggregateMultiYearMonth(
       }
     }
 
+    // Determine coverage for this specific year & month
+    const targetMonthStart = `${y}-${String(targetMonth).padStart(2, '0')}-01`
+    const targetMonthEnd = `${y}-${String(targetMonth).padStart(2, '0')}-${String(maxDays).padStart(2, '0')}`
+
+    const hasYearObservations = yearsWithRecords.has(y)
+    const isWithinDatasetBounds = Boolean(
+      datasetMinDate &&
+      datasetMaxDate &&
+      targetMonthEnd >= datasetMinDate &&
+      targetMonthStart <= datasetMaxDate
+    )
+    const hasCoverage = hasYearObservations && isWithinDatasetBounds
+
     // 2026 is partial (up to October)
     const isPartial = y === 2026 && targetMonth >= 10
+    const status: 'available' | 'no_data' | 'partial' = !hasCoverage
+      ? 'no_data'
+      : isPartial
+        ? 'partial'
+        : 'available'
 
     monthSummary.push({
       year: y,
@@ -834,17 +871,13 @@ export function aggregateMultiYearMonth(
       avgFrp: validFrpCount > 0 ? Number((frpSum / validFrpCount).toFixed(1)) : null,
       activeDaysCount: activeDays.size,
       isPartial,
+      hasCoverage,
+      status,
       firstObsDate,
       lastObsDate,
     })
   }
 
-  // Days in month: standard month length
-  const maxDays = [1, 3, 5, 7, 8, 10, 12].includes(targetMonth)
-    ? 31
-    : targetMonth === 2
-      ? 29
-      : 30
   const days: MultiYearDayData[] = []
 
   for (let d = 1; d <= maxDays; d++) {
@@ -856,11 +889,33 @@ export function aggregateMultiYearMonth(
 
       if (isFeb29 && !isLeap) {
         byYear[y] = {
-          value: 0,
-          rawCount: 0,
-          harmonizedCells: 0,
+          value: null,
+          rawCount: null,
+          harmonizedCells: null,
           hasData: false,
+          status: 'leap_day',
           isLeapDay: true,
+        }
+        continue
+      }
+
+      const dateStr = `${y}-${String(targetMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+      const hasCoverageForDate = Boolean(
+        yearsWithRecords.has(y) &&
+        datasetMinDate &&
+        datasetMaxDate &&
+        dateStr >= datasetMinDate &&
+        dateStr <= datasetMaxDate
+      )
+
+      if (!hasCoverageForDate) {
+        // No satellite observation records exist for this period
+        byYear[y] = {
+          value: null,
+          rawCount: null,
+          harmonizedCells: null,
+          hasData: false,
+          status: 'no_coverage',
         }
         continue
       }
@@ -883,13 +938,16 @@ export function aggregateMultiYearMonth(
           rawCount: dayEntry.total,
           harmonizedCells: dayEntry.activeCells.size,
           hasData: true,
+          status: 'observed_active',
         }
       } else {
+        // Confirmed zero observed activity: actively monitored period with 0 detections
         byYear[y] = {
           value: 0,
           rawCount: 0,
           harmonizedCells: 0,
           hasData: true,
+          status: 'observed_zero',
         }
       }
     }
@@ -901,5 +959,53 @@ export function aggregateMultiYearMonth(
   }
 
   return { years, monthSummary, days }
+}
+
+export {
+  calculatePercentile,
+  getDayOfYear,
+  getWeekOfYear,
+  identifyCriticalPeriods,
+} from '@/utils/criticalPeriods'
+export { generateMonitoringAdvisory } from '@/utils/monitoringAdvisory'
+
+/**
+ * Uniformly samples observations using systematic spatial-temporal stratification.
+ * Eliminates array-order and geographic truncation bias (e.g. cutting off southern regions).
+ * Always preserves the selected observation if specified.
+ */
+export function sampleObservationsStratified(
+  records: readonly FireObservation[],
+  maxLimit: number,
+  selectedId?: string | null,
+): FireObservation[] {
+  if (records.length <= maxLimit) {
+    return [...records]
+  }
+
+  const step = records.length / maxLimit
+  const sampled: FireObservation[] = []
+  let selectedFound = false
+
+  for (let i = 0; i < maxLimit; i++) {
+    const idx = Math.min(records.length - 1, Math.floor(i * step))
+    const item = records[idx]
+    if (item) {
+      sampled.push(item)
+      if (selectedId && item.id === selectedId) {
+        selectedFound = true
+      }
+    }
+  }
+
+  // Ensure selected observation is always retained
+  if (selectedId && !selectedFound) {
+    const target = records.find((r) => r.id === selectedId)
+    if (target && sampled.length > 0) {
+      sampled[sampled.length - 1] = target
+    }
+  }
+
+  return sampled
 }
 

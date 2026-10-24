@@ -11,6 +11,7 @@ import {
   MapPin,
   Satellite,
   Search,
+  ShieldAlert,
   TrendingUp,
 } from 'lucide-react'
 import {
@@ -35,6 +36,7 @@ import {
   aggregateByDate,
   aggregateByMonth,
   aggregateByRegion,
+  generateMonitoringAdvisory,
 } from '@/utils/aggregation'
 
 interface ChartTooltipPayloadItem {
@@ -100,6 +102,22 @@ export default function OverviewPage() {
     ]
   }, [summaryMetrics.dayCount, summaryMetrics.nightCount])
 
+  // Task C: Evidence-based historical pattern monitoring advisory
+  const monitoringAdvisory = useMemo(() => {
+    return generateMonitoringAdvisory(filteredObservations, {
+      aoiName: filter.regionId !== 'all' ? filter.regionId : 'All India',
+      sensor: filter.sensor,
+      metricType: filter.metricType,
+      gridResolution: filter.gridResolution,
+    })
+  }, [
+    filteredObservations,
+    filter.regionId,
+    filter.sensor,
+    filter.metricType,
+    filter.gridResolution,
+  ])
+
   // Table filtering & pagination
   const filteredTableRows = useMemo(() => {
     if (!tableSearch.trim()) return filteredObservations
@@ -163,6 +181,130 @@ export default function OverviewPage() {
           </p>
         </div>
       </div>
+
+      {/* Task C: Evidence-Based Historical Monitoring Advisory */}
+      <Card
+        padding="sm"
+        className={`border ${
+          monitoringAdvisory.level === 'critical_season_active'
+            ? 'border-rose-500/50 bg-rose-950/20'
+            : monitoringAdvisory.level === 'critical_season_approaching'
+              ? 'border-ember-500/50 bg-ember-950/20'
+              : monitoringAdvisory.level === 'moderate_monitoring'
+                ? 'border-signal-500/50 bg-signal-950/20'
+                : 'border-line bg-ink-900/70'
+        }`}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
+          <div className="flex items-start gap-2.5">
+            <ShieldAlert
+              className={`size-5 shrink-0 mt-0.5 ${
+                monitoringAdvisory.level === 'critical_season_active'
+                  ? 'text-rose-400'
+                  : monitoringAdvisory.level === 'critical_season_approaching'
+                    ? 'text-ember-400'
+                    : 'text-signal-400'
+              }`}
+            />
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-semibold text-sm text-fg">
+                  Historical Pattern-Based Monitoring Advisory
+                </h3>
+                <Badge
+                  tone={
+                    monitoringAdvisory.level === 'critical_season_active'
+                      ? 'danger'
+                      : monitoringAdvisory.level === 'critical_season_approaching'
+                        ? 'ember'
+                        : monitoringAdvisory.level === 'moderate_monitoring'
+                          ? 'signal'
+                          : 'neutral'
+                  }
+                >
+                  {monitoringAdvisory.title}
+                </Badge>
+              </div>
+              <p className="mt-1 text-xs text-fg-muted leading-relaxed">
+                {monitoringAdvisory.summary}
+              </p>
+            </div>
+          </div>
+
+          <div className="text-right text-[11px] text-fg-faint">
+            <span className="font-mono text-fg-muted block">
+              Reference: {monitoringAdvisory.referenceDate}
+            </span>
+            <span>{monitoringAdvisory.upcomingWindowLabel}</span>
+          </div>
+        </div>
+
+        {/* Historical Evidence Basis */}
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 md:grid-cols-4 text-xs">
+          <div className="rounded-lg border border-line bg-ink-950 p-2.5">
+            <span className="text-fg-faint text-[11px] block">Area of Interest</span>
+            <p className="mt-0.5 font-bold text-fg truncate">
+              {monitoringAdvisory.historicalBasis.aoiName}
+            </p>
+            <span className="text-[10px] text-fg-faint">
+              Sensor: {monitoringAdvisory.historicalBasis.sensor}
+            </span>
+          </div>
+
+          <div className="rounded-lg border border-line bg-ink-950 p-2.5">
+            <span className="text-fg-faint text-[11px] block">Historical Climatology Basis</span>
+            <p className="mt-0.5 font-bold text-signal-400">
+              {monitoringAdvisory.historicalBasis.yearsAnalyzed.length > 0
+                ? `${monitoringAdvisory.historicalBasis.yearsAnalyzed.join(', ')}`
+                : 'Insufficient records'}
+            </p>
+            <span className="text-[10px] text-fg-faint">
+              {monitoringAdvisory.historicalBasis.comparablePeriodsCount} comparable observations
+            </span>
+          </div>
+
+          <div className="rounded-lg border border-line bg-ink-950 p-2.5">
+            <span className="text-fg-faint text-[11px] block">Historical Peak Window</span>
+            <p className="mt-0.5 font-bold text-ember-400">
+              {monitoringAdvisory.historicalBasis.peakWeekLabel}
+            </p>
+            <span className="text-[10px] text-fg-faint">
+              Avg {monitoringAdvisory.historicalBasis.historicalAvgActiveCells} active cells/season
+            </span>
+          </div>
+
+          <div className="rounded-lg border border-line bg-ink-950 p-2.5">
+            <span className="text-fg-faint text-[11px] block">Archive Date Range</span>
+            <p className="mt-0.5 font-mono text-[11px] text-fg-muted truncate">
+              {monitoringAdvisory.historicalBasis.datasetDateRange.start || 'N/A'} &rarr;{' '}
+              {monitoringAdvisory.historicalBasis.datasetDateRange.end || 'N/A'}
+            </p>
+            <span className="text-[10px] text-fg-faint">NASA FIRMS archives</span>
+          </div>
+        </div>
+
+        {/* Recommended Monitoring Actions */}
+        {monitoringAdvisory.recommendedActions.length > 0 && (
+          <div className="mt-3 border-t border-line/40 pt-2.5">
+            <span className="text-[11px] font-semibold text-fg-muted block mb-1">
+              Recommended Evidence-Based Monitoring Actions:
+            </span>
+            <ul className="grid gap-1 sm:grid-cols-2 text-xs text-fg-muted list-disc list-inside">
+              {monitoringAdvisory.recommendedActions.map((action, idx) => (
+                <li key={idx} className="leading-snug">
+                  {action}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Limitations Notice */}
+        <p className="mt-3 border-t border-line/40 pt-2 text-[10px] text-fg-faint leading-relaxed">
+          <strong className="text-fg-muted">Limitations &amp; Uncertainty: </strong>
+          {monitoringAdvisory.limitationsNotice}
+        </p>
+      </Card>
 
       {/* 6 Summary Metric Cards */}
       <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6">

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import {
   CircleMarker,
   MapContainer,
@@ -10,12 +11,13 @@ import {
   useMap,
   useMapEvents,
 } from 'react-leaflet'
-import type { LatLngBoundsExpression } from 'leaflet'
+import type { LatLngBounds, LatLngBoundsExpression } from 'leaflet'
 import {
   Check,
   Crosshair,
   Download,
   Flame,
+  Grid,
   Layers,
   MapPin,
   Maximize2,
@@ -36,6 +38,10 @@ import {
   exportCustomAoiGeoJson,
   exportObservationsGeoJson,
 } from '@/utils/exportUtils'
+import {
+  aggregateSpatialGrid,
+  sampleObservationsStratified,
+} from '@/utils/aggregation'
 
 // Center coordinate for India
 const INDIA_CENTER: [number, number] = [17.5, 78.5]
@@ -88,6 +94,28 @@ function DrawingMapEvents({
   return null
 }
 
+// Map event listener to track active viewport bounding box
+function ViewportTracker({
+  onBoundsChange,
+}: {
+  onBoundsChange: (bounds: LatLngBounds) => void
+}) {
+  const map = useMapEvents({
+    moveend() {
+      onBoundsChange(map.getBounds())
+    },
+    zoomend() {
+      onBoundsChange(map.getBounds())
+    },
+  })
+
+  useEffect(() => {
+    onBoundsChange(map.getBounds())
+  }, [map, onBoundsChange])
+
+  return null
+}
+
 export default function FireExplorerPage() {
   const {
     filteredObservations,
@@ -96,16 +124,30 @@ export default function FireExplorerPage() {
     selectedObservationId,
     setSelectedObservationId,
     filter,
+    resetFilter,
     metadata,
     customAoi,
     setCustomAoi,
     clearCustomAoi,
   } = useFireData()
 
+  const location = useLocation()
+  const locationState = location.state as { inspectedDate?: string; fromAnomaly?: boolean } | null
+
   const [resetTrigger, setResetTrigger] = useState(0)
   const [fitBounds, setFitBounds] = useState<LatLngBoundsExpression | null>(null)
   const [showRegionBounds, setShowRegionBounds] = useState(true)
   const [darkBasemap, setDarkBasemap] = useState(true)
+  const [dismissedAnomalyBanner, setDismissedAnomalyBanner] = useState(false)
+  const [showGridOverlay, setShowGridOverlay] = useState(false)
+  const [viewportBounds, setViewportBounds] = useState<LatLngBounds | null>(null)
+  const [renderMode, setRenderMode] = useState<'hotspots' | 'grid' | 'hybrid'>('hotspots')
+
+  const isInspectingAnomaly = Boolean(
+    !dismissedAnomalyBanner &&
+      (locationState?.fromAnomaly ||
+        (locationState?.inspectedDate && filter.startDate === locationState.inspectedDate)),
+  )
 
   // Custom AOI drawing state
   const [isDrawing, setIsDrawing] = useState(false)
@@ -139,6 +181,13 @@ export default function FireExplorerPage() {
       [maxLat, maxLng],
     ])
   }
+
+  // Auto-fit to filtered observations when inspecting an anomaly
+  useEffect(() => {
+    if (locationState?.fromAnomaly && filteredObservations.length > 0) {
+      handleFitToFiltered()
+    }
+  }, [locationState?.fromAnomaly])
 
   const handleResetView = () => {
     setFitBounds(null)
@@ -239,19 +288,42 @@ export default function FireExplorerPage() {
     e.target.value = ''
   }
 
-  // Cap markers rendered on map for smooth 60fps performance if thousands exist
+  const MAX_MAP_RENDER_MARKERS = 5000
+
+  // Filter observations to current map viewport
+  const viewportObservations = useMemo(() => {
+    if (!viewportBounds) return filteredObservations
+    const south = viewportBounds.getSouth()
+    const north = viewportBounds.getNorth()
+    const west = viewportBounds.getWest()
+    const east = viewportBounds.getEast()
+    return filteredObservations.filter(
+      (o) =>
+        o.latitude >= south &&
+        o.latitude <= north &&
+        o.longitude >= west &&
+        o.longitude <= east,
+    )
+  }, [filteredObservations, viewportBounds])
+
+  // Statistically representative map observation sampling using systematic stratification
   const mapObservations = useMemo(() => {
-    if (filteredObservations.length <= 1500) return filteredObservations
-    // If over 1500, take a representative subsample + always include selected
-    const sample = filteredObservations.slice(0, 1500)
-    if (
-      selectedObservation &&
-      !sample.some((o) => o.id === selectedObservation.id)
-    ) {
-      sample.push(selectedObservation)
-    }
-    return sample
-  }, [filteredObservations, selectedObservation])
+    if (renderMode === 'grid') return []
+    const limit = renderMode === 'hybrid' ? 2500 : MAX_MAP_RENDER_MARKERS
+    return sampleObservationsStratified(
+      viewportObservations,
+      limit,
+      selectedObservationId,
+    )
+  }, [viewportObservations, renderMode, selectedObservationId])
+
+  // Aggregate spatial grid cells for overlay or density grid mode (100% of observations accounted for)
+  const spatialGridCells = useMemo(() => {
+    if (renderMode === 'hotspots' && !showGridOverlay) return []
+    const targetObs = viewportObservations.length > 0 ? viewportObservations : filteredObservations
+    const { cells } = aggregateSpatialGrid(targetObs, 0.25)
+    return cells
+  }, [renderMode, showGridOverlay, viewportObservations, filteredObservations])
 
   return (
     <div className="flex flex-col gap-6">
@@ -268,6 +340,54 @@ export default function FireExplorerPage() {
       {/* Shared Filter Bar */}
       <FilterBar />
 
+      {/* Anomaly Inspection Alert Banner */}
+      {isInspectingAnomaly && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ember-500/50 bg-ember-950/40 px-4 py-3 text-xs text-ember-200">
+          <div className="flex items-start gap-2.5">
+            <Zap className="size-4 text-ember-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-fg">Inspecting Historical Anomaly:</span>
+                <span className="font-mono font-bold text-ember-300">
+                  {locationState?.inspectedDate || filter.startDate}
+                </span>
+                <Badge tone={filteredObservations.length > 0 ? 'ember' : 'neutral'}>
+                  {filteredObservations.length > 0 ? `${filteredObservations.length} Hotspots Detected` : '0 Matches in View'}
+                </Badge>
+              </div>
+              <p className="text-fg-muted">
+                Active context — Region: <strong className="text-fg">{activeRegionDef?.name || 'All India'}</strong> | Sensor: <strong className="text-fg">{filter.sensor.toUpperCase()}</strong>
+                {filteredObservations.length === 0 && (
+                  <span className="block text-amber-300 mt-0.5">
+                    Notice: No active-fire records match this date for the current sensor and spatial boundary filter. The anomaly may have been detected under a different sensor or AOI setting.
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setDismissedAnomalyBanner(true)
+                resetFilter()
+              }}
+              className="rounded border border-line bg-ink-800 px-2.5 py-1 text-[11px] font-medium text-fg-muted hover:text-fg hover:bg-ink-700"
+            >
+              Reset Dates
+            </button>
+            <button
+              type="button"
+              onClick={() => setDismissedAnomalyBanner(true)}
+              className="rounded p-1 text-fg-muted hover:text-fg"
+              title="Dismiss banner"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Map Control Bar & Metrics Summary */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-ink-900/90 px-4 py-3 text-xs">
         <div className="flex flex-wrap items-center gap-4">
@@ -276,6 +396,14 @@ export default function FireExplorerPage() {
               {filteredObservations.length.toLocaleString()}
             </span>
             <span className="text-fg-muted">Hotspots</span>
+            {filteredObservations.length > mapObservations.length && (
+              <span
+                className="ml-2 rounded-full border border-ember-500/50 bg-ember-950/60 px-2 py-0.5 text-[10px] font-semibold text-ember-300"
+                title={`Rendering ${mapObservations.length.toLocaleString()} representative points via HTML5 Canvas for browser responsiveness. All ${filteredObservations.length.toLocaleString()} hotspots are included in metrics, AOI filters, and data exports.`}
+              >
+                Displaying {mapObservations.length.toLocaleString()} of {filteredObservations.length.toLocaleString()} (Canvas Optimized)
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -375,6 +503,60 @@ export default function FireExplorerPage() {
           >
             <Download className="size-3" />
             <span>GeoJSON</span>
+          </button>
+
+          {/* Render Mode Selector */}
+          <div className="flex items-center rounded-lg border border-line bg-ink-800 p-0.5">
+            <button
+              type="button"
+              onClick={() => setRenderMode('hotspots')}
+              className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                renderMode === 'hotspots'
+                  ? 'bg-ink-700 text-fg font-semibold shadow-xs'
+                  : 'text-fg-muted hover:text-fg'
+              }`}
+              title="Individual hotspot points rendered via HTML5 canvas"
+            >
+              Hotspots
+            </button>
+            <button
+              type="button"
+              onClick={() => setRenderMode('grid')}
+              className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                renderMode === 'grid'
+                  ? 'bg-ink-700 text-signal-300 font-semibold shadow-xs'
+                  : 'text-fg-muted hover:text-fg'
+              }`}
+              title="Density Grid: 100% of observations aggregated into 0.25° spatial cells (Zero truncation)"
+            >
+              Density Grid (100%)
+            </button>
+            <button
+              type="button"
+              onClick={() => setRenderMode('hybrid')}
+              className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                renderMode === 'hybrid'
+                  ? 'bg-ink-700 text-ember-300 font-semibold shadow-xs'
+                  : 'text-fg-muted hover:text-fg'
+              }`}
+              title="Hybrid: Both 100% density grid cells and representative hotspot markers"
+            >
+              Hybrid
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowGridOverlay((s) => !s)}
+            className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 font-medium transition-colors ${
+              showGridOverlay
+                ? 'border-signal-400/50 bg-signal-400/10 text-signal-300'
+                : 'border-line bg-ink-800 text-fg-muted hover:bg-ink-700'
+            }`}
+            title="Toggle 0.25° Spatial Grid Aggregation Overlay"
+          >
+            <Grid className="size-3" />
+            <span>Grid Overlay</span>
           </button>
 
           <button
@@ -479,6 +661,28 @@ export default function FireExplorerPage() {
       <div className="grid gap-6 lg:grid-cols-12 items-start">
         {/* Map Container (8 cols) */}
         <div className="lg:col-span-8 flex flex-col gap-2">
+          {/* Scientific Map Rendering Status Banner */}
+          {viewportObservations.length > mapObservations.length && renderMode !== 'grid' ? (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-950/30 px-3.5 py-2 text-xs text-amber-200">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-amber-300">Scientifically Stratified Viewport:</span>
+                <span>
+                  Rendering {mapObservations.length.toLocaleString()} representative hotspots via uniform spatial-temporal systematic sampling across {viewportObservations.length.toLocaleString()} visible in this viewport ({filteredObservations.length.toLocaleString()} total in dataset). 100% of records are preserved in metrics, filters, and exports. Zoom in to view all individual points without sampling, or switch to <strong>Density Grid</strong>.
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-500/30 bg-emerald-950/20 px-3.5 py-1.5 text-xs text-emerald-200">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-emerald-300">Complete Representation:</span>
+                <span>
+                  {renderMode === 'grid'
+                    ? `100% of visible observations (${viewportObservations.length.toLocaleString()} hotspots) aggregated into ${spatialGridCells.length.toLocaleString()} spatial density cells without truncation.`
+                    : `100% of hotspots in current viewport (${viewportObservations.length.toLocaleString()} of ${filteredObservations.length.toLocaleString()} total) rendered individually on canvas.`}
+                </span>
+              </div>
+            </div>
+          )}
           <div className="relative h-[550px] w-full overflow-hidden rounded-xl border border-line bg-ink-950 shadow-panel">
             {filteredObservations.length === 0 && !customAoi && !isDrawing ? (
               <div className="flex h-full items-center justify-center p-6">
@@ -493,10 +697,12 @@ export default function FireExplorerPage() {
                 center={INDIA_CENTER}
                 zoom={DEFAULT_ZOOM}
                 scrollWheelZoom={true}
+                preferCanvas={true}
                 className={`h-full w-full ${darkBasemap ? 'leaflet-dark-mode' : ''}`}
                 style={{ height: '100%', width: '100%', background: '#0a0b0d' }}
               >
                 <MapViewController bounds={fitBounds} resetTrigger={resetTrigger} />
+                <ViewportTracker onBoundsChange={setViewportBounds} />
                 <DrawingMapEvents
                   isDrawing={isDrawing}
                   onAddPoint={handleAddDrawingPoint}
@@ -539,6 +745,56 @@ export default function FireExplorerPage() {
                     }}
                   />
                 )}
+
+                {/* Spatial Grid Overlay (0.25 deg) */}
+                {showGridOverlay &&
+                  spatialGridCells.map((cell) => {
+                    const fillColor =
+                      cell.category === 'MODIS_ONLY'
+                        ? '#ff8a1f'
+                        : cell.category === 'VIIRS_ONLY'
+                          ? '#38bdf8'
+                          : '#a855f7'
+
+                    return (
+                      <Rectangle
+                        key={cell.cellId}
+                        bounds={[
+                          [cell.minLat, cell.minLng],
+                          [cell.maxLat, cell.maxLng],
+                        ]}
+                        pathOptions={{
+                          color: fillColor,
+                          weight: 1,
+                          dashArray: '3, 3',
+                          fillColor,
+                          fillOpacity: 0.25,
+                        }}
+                      >
+                        <Popup className="pyrolens-popup">
+                          <div className="p-1 text-xs space-y-1">
+                            <p className="font-semibold font-mono text-fg">{cell.cellId}</p>
+                            <div className="space-y-0.5 text-fg-muted">
+                              <p>
+                                <strong>Total Hotspots:</strong> {cell.totalCount}
+                              </p>
+                              <p>
+                                <strong>MODIS:</strong> {cell.modisCount} | <strong>VIIRS:</strong>{' '}
+                                {cell.viirsCount}
+                              </p>
+                              <p>
+                                <strong>Avg FRP:</strong>{' '}
+                                {cell.avgFrp !== null ? `${cell.avgFrp} MW` : 'N/A'}
+                              </p>
+                              <p>
+                                <strong>Category:</strong> {cell.category}
+                              </p>
+                            </div>
+                          </div>
+                        </Popup>
+                      </Rectangle>
+                    )
+                  })}
 
                 {/* In-progress drawing points & polyline */}
                 {isDrawing && drawnPoints.length > 0 && (
