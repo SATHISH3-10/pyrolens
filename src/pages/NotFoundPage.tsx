@@ -6,8 +6,8 @@ export default function NotFoundPage() {
     <EmptyState
       icon={SearchX}
       title="Page not found"
-      description="This address doesn't match any PyroLens page. Use the navigation, or return to the overview."
-      action={<LinkButton to="/" variant="primary">Go to Overview</LinkButton>}
+      description="This address doesn't match any PyroLens page. Use the navigation, or return to the dashboard."
+      action={<LinkButton to="/" variant="primary">Go to Dashboard</LinkButton>}
     />
   )
 }

@@ -11,7 +11,7 @@ import type {
 /**
  * Escapes a field for safe CSV output.
  */
-function escapeCsv(val: unknown): string {
+export function escapeCsv(val: unknown): string {
   if (val === null || val === undefined) return ''
   const str = String(val)
   if (str.includes(',') || str.includes('"') || str.includes('\n')) {
@@ -23,7 +23,7 @@ function escapeCsv(val: unknown): string {
 /**
  * Triggers a file download in the browser.
  */
-function triggerDownload(content: string, fileName: string, mimeType: string) {
+export function triggerDownload(content: string, fileName: string, mimeType: string) {
   if (typeof window === 'undefined' || typeof document === 'undefined') return
   const blob = new Blob([content], { type: mimeType })
   if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return

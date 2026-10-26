@@ -23,7 +23,7 @@ export function NavList({ collapsed = false, onNavigate }: NavListProps) {
               aria-label={collapsed ? label : undefined}
               className={({ isActive }) =>
                 cn(
-                  'group relative flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-colors',
+                  'group relative flex items-center gap-3 rounded-lg py-2 text-[13px] font-medium transition-colors',
                   collapsed ? 'justify-center px-0' : 'px-3',
                   isActive
                     ? 'bg-ink-700 text-fg'

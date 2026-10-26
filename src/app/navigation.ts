@@ -1,113 +1,64 @@
 import {
   BookOpen,
   CalendarDays,
-  Flame,
-  FileBarChart,
+  FileDown,
   GitCompareArrows,
   LayoutDashboard,
+  Map,
   type LucideIcon,
 } from 'lucide-react'
 
 export interface NavItem {
-  /** Route path. */
   path: string
-  /** Sidebar label. */
   label: string
-  /** Page title shown in the header. */
+  /** Page title used for the document title. */
   title: string
-  /** One-line summary of the page's purpose. */
   description: string
   icon: LucideIcon
-  /** Development part that will implement this page (see README roadmap). */
-  plannedPart: number
-  /** Short list of what the page will contain once implemented. */
-  planned: string[]
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
   {
     path: '/',
-    label: 'Overview',
-    title: 'Overview',
-    description: 'Harmonized summary of satellite active-fire observations across India.',
+    label: 'Dashboard',
+    title: 'Dashboard',
+    description: 'Outlook, seasonal pattern and the harmonized burning calendar at a glance.',
     icon: LayoutDashboard,
-    plannedPart: 2,
-    planned: [
-      'Headline counts for MODIS and VIIRS detections',
-      'Coverage and data-quality summary',
-      'Interactive time-series and monthly distribution charts',
-      'Filterable observations data table',
-    ],
   },
   {
-    path: '/explorer',
-    label: 'Fire Explorer',
-    title: 'Fire Explorer',
-    description: 'Interactive OpenStreetMap geospatial exploration of hotspot detections.',
-    icon: Flame,
-    plannedPart: 3,
-    planned: [
-      'Interactive map of hotspot detections with sensor styling',
-      'Combined filters for sensor, dates, and regional envelopes',
-      'Detailed inspection panel for selected observations',
-      'Fit-to-filtered and view reset controls',
-    ],
-  },
-  {
-    path: '/harmonization',
-    label: 'Sensor Harmonization',
-    title: 'Sensor Harmonization',
-    description: 'Compare MODIS (1 km) and VIIRS (375 m) using spatiotemporal grid binning.',
-    icon: GitCompareArrows,
-    plannedPart: 4,
-    planned: [
-      'Side-by-side MODIS and VIIRS physical specifications',
-      'Configurable spatiotemporal grid binning demo',
-      'Coincident detection matrix and Jaccard similarity',
-      'Transparent scientific harmonization principles',
-    ],
+    path: '/map',
+    label: 'Fire Map',
+    title: 'Fire Map',
+    description: 'Hotspots, fire clusters and density for any day or period; draw an area of interest.',
+    icon: Map,
   },
   {
     path: '/calendar',
-    label: 'Historical Calendar',
-    title: 'Historical Calendar',
-    description: 'Temporal heatmap showing fire detection activity across days and seasons.',
+    label: 'Burning Calendar',
+    title: 'Burning Calendar',
+    description: 'Daily, weekly and monthly Burning Activity Index with anomalies and critical periods.',
     icon: CalendarDays,
-    plannedPart: 5,
-    planned: [
-      'Daily calendar heatmap with intensity color scale',
-      'Month-by-month and 12-month overview modes',
-      'Zero-detection scientific advisory rule',
-      'Deep-linking to locate specific days in Fire Explorer',
-    ],
   },
   {
-    path: '/insights',
-    label: 'Insights & Reports',
-    title: 'Insights & Reports',
-    description: 'Statistical observation anomaly detection and reproducible data exports.',
-    icon: FileBarChart,
-    plannedPart: 6,
-    planned: [
-      'Robust statistical anomaly detection using Median and MAD',
-      'Transparent baseline parameters and sensitivity thresholding',
-      'Export filtered observations as CSV',
-      'Export daily aggregates and Markdown intelligence reports',
-    ],
+    path: '/harmonization',
+    label: 'Harmonization',
+    title: 'Sensor Harmonization',
+    description: 'How MODIS and VIIRS are put on one comparable scale.',
+    icon: GitCompareArrows,
+  },
+  {
+    path: '/reports',
+    label: 'Reports & Export',
+    title: 'Reports & Export',
+    description: 'Download BAI tables, clusters, hotspots and summary reports.',
+    icon: FileDown,
   },
   {
     path: '/methodology',
-    label: 'Methodology',
-    title: 'Methodology',
-    description: 'Scientific principles, sensor physics, FRP definition, and data limitations.',
+    label: 'How it works',
+    title: 'How it works',
+    description: 'MODIS, VIIRS, harmonization, the BAI and the limitations.',
     icon: BookOpen,
-    plannedPart: 7,
-    planned: [
-      'Satellite thermal anomaly detection physics',
-      'Why MODIS and VIIRS counts cannot be summed',
-      'FRP definition and why FRP does not equal burned area',
-      'Data provenance and future official NASA FIRMS integration',
-    ],
   },
 ] as const
 

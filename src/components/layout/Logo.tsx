@@ -37,7 +37,7 @@ export function Wordmark({ compact = false, className }: WordmarkProps) {
     <span className={cn('flex items-center gap-2.5', className)}>
       <LogoMark />
       {!compact && (
-        <span className="text-lg font-semibold tracking-tight text-fg">
+        <span className="text-[17px] font-semibold tracking-tight text-fg">
           Pyro<span className="text-ember-400">Lens</span>
         </span>
       )}

@@ -46,7 +46,7 @@ export function MobileNav({ open, onClose }: MobileNavProps) {
         className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-line bg-ink-900 shadow-2xl"
       >
         <div className="flex h-16 shrink-0 items-center justify-between border-b border-line px-5">
-          <Link to="/" onClick={onClose} aria-label="PyroLens, go to Overview" className="rounded-md">
+          <Link to="/" onClick={onClose} aria-label="PyroLens, go to Dashboard" className="rounded-md">
             <Wordmark />
           </Link>
           <button

@@ -1,518 +1,310 @@
-import { useState, type ChangeEvent, type DragEvent } from 'react'
-import {
-  AlertCircle,
-  CheckCircle2,
-  Database,
-  FileSpreadsheet,
-  FileText,
-  Key,
-  Loader2,
-  RotateCcw,
-  Sparkles,
-  Upload,
-  X,
-} from 'lucide-react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { AlertCircle, CheckCircle2, FileSpreadsheet, Globe2, Key, Loader2, Satellite, Upload, X } from 'lucide-react'
 import { useFireData } from '@/context/FireDataContext'
-import { parseFirmsCsv } from '@/data/firmsCsvImporter'
+import { parseFirmsCsv, MAX_SAFE_BROWSER_RECORDS } from '@/data/firmsCsvImporter'
+import { STUDY_AREAS, toFirmsBbox } from '@/data/studyAreas'
+import { Button, Segmented } from '@/components/ui'
+import { cn } from '@/lib'
 
 const SAMPLE_FIRMS_CSV = `latitude,longitude,brightness,scan,track,acq_date,acq_time,satellite,instrument,confidence,version,bright_t31,frp,daynight
 11.4521,76.7821,332.4,1.1,1.0,2024-03-15,0530,Terra,MODIS,85,6.1NRT,308.2,34.8,D
 11.4682,76.7915,340.1,0.4,0.38,2024-03-15,0610,Suomi-NPP,VIIRS,nominal,2.0NRT,312.4,12.5,D
 11.4705,76.7942,336.8,0.39,0.37,2024-03-15,0610,Suomi-NPP,VIIRS,high,2.0NRT,310.1,9.8,D
 12.3512,78.8415,328.6,1.2,1.1,2024-03-16,0815,Aqua,MODIS,72,6.1NRT,305.5,22.1,D
-15.7421,78.9614,345.2,1.0,1.0,2024-03-18,0520,Terra,MODIS,92,6.1NRT,314.2,58.4,D
-15.7512,78.9723,352.1,0.38,0.36,2024-03-18,0605,NOAA-20,VIIRS,high,2.0NRT,318.6,24.1,D
-15.7584,78.9812,348.5,0.38,0.36,2024-03-18,0605,NOAA-20,VIIRS,high,2.0NRT,316.2,18.9,D
-16.6421,78.8512,331.0,1.1,1.0,2024-03-21,0830,Aqua,MODIS,68,6.1NRT,309.0,19.5,D
-16.6542,78.8621,339.4,0.4,0.38,2024-03-21,0840,Suomi-NPP,VIIRS,nominal,2.0NRT,311.5,11.2,D`
+11.7421,78.9614,345.2,1.0,1.0,2024-03-18,0520,Terra,MODIS,92,6.1NRT,314.2,58.4,D
+11.7512,78.9723,352.1,0.38,0.36,2024-03-18,0605,NOAA-20,VIIRS,high,2.0NRT,318.6,24.1,D
+11.7584,78.9812,348.5,0.38,0.36,2024-03-18,0605,NOAA-20,VIIRS,high,2.0NRT,316.2,18.9,D`
+
+type Tab = 'demo' | 'file' | 'api'
+type Status = { type: 'success' | 'error'; text: string } | null
+
+const API_SOURCES = [
+  { id: 'both', label: 'MODIS + VIIRS (S-NPP & NOAA-20)', sources: ['MODIS_NRT', 'VIIRS_SNPP_NRT', 'VIIRS_NOAA20_NRT'] },
+  { id: 'viirs', label: 'VIIRS S-NPP only', sources: ['VIIRS_SNPP_NRT'] },
+  { id: 'modis', label: 'MODIS only', sources: ['MODIS_NRT'] },
+] as const
 
 export function CsvImportModal() {
   const {
     isCsvModalOpen,
     setIsCsvModalOpen,
     importCsvContent,
-    loadSyntheticData,
+    setStudyAreaId,
+    area,
+    customAoi,
     metadata,
   } = useFireData()
 
-  // Tab: 'file' (upload CSV from DL_FIRE_...) vs 'api' (fetch live with MAP_KEY)
-  const [modalTab, setModalTab] = useState<'file' | 'api'>('file')
-
-  // File upload state
-  const [csvText, setCsvText] = useState('')
-  const [fileName, setFileName] = useState('uploaded_firms.csv')
-  const [statusMessage, setStatusMessage] = useState<{
-    type: 'success' | 'error'
-    text: string
-  } | null>(null)
-  const [isDragging, setIsDragging] = useState(false)
-
-  // NASA FIRMS Live API state
-  const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
+  const [tab, setTab] = useState<Tab>('demo')
+  const [files, setFiles] = useState<Array<{ name: string; text: string; rows: number; modis: number; viirs: number }>>([])
+  const [status, setStatus] = useState<Status>(null)
+  const [dragging, setDragging] = useState(false)
   const [apiKey, setApiKey] = useState('')
-  const [apiSource, setApiSource] = useState<'VIIRS_SNPP_NRT' | 'MODIS_NRT' | 'VIIRS_NOAA20_NRT'>('VIIRS_SNPP_NRT')
-  const [apiDays, setApiDays] = useState<number>(3)
-  const [isLoadingApi, setIsLoadingApi] = useState(false)
+  const [apiChoice, setApiChoice] = useState<(typeof API_SOURCES)[number]['id']>('both')
+  const [apiDays, setApiDays] = useState(5)
+  const [loading, setLoading] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
+
+  useEffect(() => {
+    if (!isCsvModalOpen) return
+    setStatus(null)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setIsCsvModalOpen(false)
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [isCsvModalOpen, setIsCsvModalOpen])
 
   if (!isCsvModalOpen) return null
 
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setFileName(file.name)
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const text = event.target?.result as string
-      setCsvText(text)
-      validatePreview(text, file.name)
-    }
-    reader.readAsText(file)
-  }
+  const bbox = toFirmsBbox(customAoi ? customAoi.bounds : area.bounds)
+  const close = () => setIsCsvModalOpen(false)
 
-  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    setIsDragging(false)
-    const file = e.dataTransfer.files[0]
-    if (!file) return
-    setFileName(file.name)
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const text = event.target?.result as string
-      setCsvText(text)
-      validatePreview(text, file.name)
-    }
-    reader.readAsText(file)
-  }
-
-  const validatePreview = (text: string, fName: string) => {
-    const res = parseFirmsCsv(text, fName)
-    if (!res.success) {
-      setStatusMessage({ type: 'error', text: res.error || 'Invalid CSV format' })
-    } else {
-      setStatusMessage({
-        type: 'success',
-        text: `Valid FIRMS dataset: ${res.observations.length} observations found (${res.metadata.modisCount} MODIS, ${res.metadata.viirsCount} VIIRS).`,
-      })
-    }
-  }
-
-  const handleApply = () => {
-    if (!csvText.trim()) {
-      setStatusMessage({ type: 'error', text: 'Please select a file or paste CSV text first.' })
-      return
-    }
-
-    const res = importCsvContent(csvText, fileName)
-    if (res.success) {
-      setIsCsvModalOpen(false)
-    } else {
-      setStatusMessage({ type: 'error', text: res.message })
-    }
-  }
-
-  const handleLoadSample = () => {
-    setCsvText(SAMPLE_FIRMS_CSV)
-    setFileName('sample_firms_india_subset.csv')
-    validatePreview(SAMPLE_FIRMS_CSV, 'sample_firms_india_subset.csv')
-  }
-
-  const handleResetToDemo = () => {
-    loadSyntheticData()
-    setIsCsvModalOpen(false)
-  }
-
-  // Fetch live NASA FIRMS API via secure server proxy
-  const handleFetchFromNasaApi = async () => {
-    setIsLoadingApi(true)
-    setStatusMessage(null)
-
-    try {
-      // Call through the server proxy to avoid CORS and protect API credentials
-      const daysCount = Math.min(5, Math.max(1, apiDays))
-      const endpoint = `${apiBaseUrl}/api/firms/live?source=${apiSource}&days=${daysCount}&area=68,8,97,37`
-
-      const headers: Record<string, string> = {}
-      const cleanKey = apiKey.trim()
-      if (cleanKey) {
-        headers['x-firms-map-key'] = cleanKey
-      }
-
-      const response = await fetch(endpoint, { headers })
-
-      if (!response.ok) {
-        let errorMsg = `HTTP ${response.status}: ${response.statusText}`
-        try {
-          const errData = await response.json()
-          if (errData.error) errorMsg = errData.error
-        } catch {
-          const errText = await response.text()
-          if (errText) errorMsg = errText
+  const addFiles = (list: FileList | null) => {
+    if (!list) return
+    Array.from(list).forEach((file) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const text = String(reader.result)
+        const res = parseFirmsCsv(text, file.name)
+        if (!res.success) {
+          setStatus({ type: 'error', text: `${file.name}: ${res.error ?? 'not a FIRMS CSV'}` })
+          return
         }
-        throw new Error(errorMsg)
+        setFiles((prev) => [
+          ...prev.filter((f) => f.name !== file.name),
+          { name: file.name, text, rows: res.observations.length, modis: res.metadata.modisCount, viirs: res.metadata.viirsCount },
+        ])
+        setStatus(null)
       }
+      reader.readAsText(file)
+    })
+  }
 
-      const text = await response.text()
+  const applyFiles = () => {
+    if (files.length === 0) return
+    const name = files.length === 1 ? files[0]!.name : `${files.length} FIRMS files`
+    const res = importCsvContent(
+      files.map((f) => f.text),
+      name,
+    )
+    if (res.success) {
+      setFiles([])
+      close()
+    } else setStatus({ type: 'error', text: res.message })
+  }
 
-      // Check if NASA returned an error string instead of CSV
-      if (text.includes('Invalid MAP_KEY') || text.startsWith('Error:')) {
-        throw new Error(text.trim())
-      }
-
-      const fetchFileName = `NASA_${apiSource}_IND_${apiDays}days.csv`
-      setCsvText(text)
-      setFileName(fetchFileName)
-
-      const parsed = parseFirmsCsv(text, fetchFileName)
-      if (!parsed.success || parsed.observations.length === 0) {
-        throw new Error(parsed.error || 'No valid observation rows returned by NASA for India.')
-      }
-
-      const applyRes = importCsvContent(text, fetchFileName, 'firms-live-api')
-      if (applyRes.success) {
-        setIsCsvModalOpen(false)
-      } else {
-        setStatusMessage({ type: 'error', text: applyRes.message })
-      }
+  const fetchApi = async () => {
+    setLoading(true)
+    setStatus(null)
+    try {
+      const choice = API_SOURCES.find((s) => s.id === apiChoice)!
+      const headers: Record<string, string> = {}
+      if (apiKey.trim()) headers['x-firms-map-key'] = apiKey.trim()
+      const texts = await Promise.all(
+        choice.sources.map(async (source) => {
+          const resp = await fetch(`${apiBaseUrl}/api/firms/live?source=${source}&days=${apiDays}&area=${bbox}`, { headers })
+          if (!resp.ok) {
+            let msg = `HTTP ${resp.status}`
+            try {
+              const j = await resp.json()
+              if (j.error) msg = j.error
+            } catch {
+              /* non-JSON error body */
+            }
+            throw new Error(`${source}: ${msg}`)
+          }
+          return resp.text()
+        }),
+      )
+      const usable = texts.filter((t) => t.trim().split('\n').length > 1)
+      if (usable.length === 0) throw new Error('FIRMS returned no detections for this area and period.')
+      const res = importCsvContent(usable, `FIRMS ${area.name} last ${apiDays} days.csv`, 'firms-live-api')
+      if (!res.success) throw new Error(res.message)
+      close()
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      setStatusMessage({
-        type: 'error',
-        text: `NASA API Error: ${msg}. Configure NASA_FIRMS_MAP_KEY on your server or enter an active MAP_KEY.`,
-      })
+      setStatus({ type: 'error', text: err instanceof Error ? err.message : String(err) })
     } finally {
-      setIsLoadingApi(false)
+      setLoading(false)
     }
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="csv-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
-    >
-      <div className="relative w-full max-w-2xl rounded-2xl border border-line-strong bg-ink-900 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-line px-6 py-4 bg-ink-950">
-          <div className="flex items-center gap-2">
-            <Upload className="size-5 text-ember-400" aria-hidden="true" />
-            <div>
-              <h2 id="csv-modal-title" className="text-base font-semibold text-fg">
-                Load Official NASA FIRMS Data
-              </h2>
-              <p className="text-xs text-fg-muted">
-                Import extracted CSV files or fetch live observations using your NASA MAP_KEY
+    <div role="dialog" aria-modal="true" aria-labelledby="data-modal-title" className="fixed inset-0 z-[2000] flex items-center justify-center p-4">
+      <button type="button" aria-label="Close" tabIndex={-1} onClick={close} className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div className="relative flex max-h-[90vh] w-full max-w-xl animate-fade-in flex-col overflow-hidden rounded-2xl border border-line-strong bg-ink-850 shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-line px-6 py-4">
+          <div>
+            <h2 id="data-modal-title" className="text-base font-semibold text-fg">Data source</h2>
+            <p className="mt-0.5 text-xs text-fg-muted">
+              Currently: <span className="text-fg">{metadata.title}</span> · {metadata.recordCount.toLocaleString()} detections
+            </p>
+          </div>
+          <button type="button" onClick={close} aria-label="Close" className="rounded-lg p-1.5 text-fg-muted hover:bg-ink-700 hover:text-fg">
+            <X className="size-4" />
+          </button>
+        </div>
+
+        <div className="px-6 pt-4">
+          <Segmented
+            className="w-full"
+            aria-label="Data source type"
+            value={tab}
+            onChange={(t) => {
+              setTab(t)
+              setStatus(null)
+            }}
+            options={[
+              { value: 'demo', label: 'Demo areas' },
+              { value: 'file', label: 'Upload FIRMS CSV' },
+              { value: 'api', label: 'FIRMS API' },
+            ]}
+            size="md"
+          />
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          {tab === 'demo' && (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {STUDY_AREAS.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() => {
+                    setStudyAreaId(a.id)
+                    close()
+                  }}
+                  className={cn(
+                    'rounded-xl border p-3 text-left transition-colors',
+                    a.id === area.id ? 'border-ember-500/50 bg-ember-500/10' : 'border-line bg-ink-800 hover:border-line-strong',
+                  )}
+                >
+                  <div className="flex items-center gap-2 text-[13px] font-semibold text-fg">
+                    <Globe2 className="size-4 text-ember-400" /> {a.name}
+                  </div>
+                  <p className="mt-1 text-[11px] leading-snug text-fg-muted">{a.shortDescription}</p>
+                  <p className="mt-1.5 text-[11px] text-fg-faint">2003–2025 · peak {a.typicalSeasonLabel}</p>
+                </button>
+              ))}
+              <p className="text-[11px] leading-relaxed text-fg-faint sm:col-span-2">
+                Demo archives are synthetic and deterministic; they reproduce sensor behaviour (launch dates, resolution, cloud gaps) but are not NASA observations.
               </p>
             </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIsCsvModalOpen(false)}
-            className="rounded-lg p-1.5 text-fg-muted hover:bg-ink-800 hover:text-fg"
-            aria-label="Close dialog"
-          >
-            <X className="size-5" />
-          </button>
-        </div>
-
-        {/* Tab selection: Local CSV vs Live API */}
-        <div className="flex border-b border-line bg-ink-950/60 px-6 text-xs font-semibold">
-          <button
-            type="button"
-            onClick={() => {
-              setModalTab('file')
-              setStatusMessage(null)
-            }}
-            className={`flex items-center gap-1.5 py-2.5 px-3 border-b-2 transition-colors ${
-              modalTab === 'file'
-                ? 'border-ember-500 text-fg'
-                : 'border-transparent text-fg-muted hover:text-fg'
-            }`}
-          >
-            <FileSpreadsheet className="size-3.5 text-ember-400" />
-            <span>Extracted CSV Files (DL_FIRE_...)</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setModalTab('api')
-              setStatusMessage(null)
-            }}
-            className={`flex items-center gap-1.5 py-2.5 px-3 border-b-2 transition-colors ${
-              modalTab === 'api'
-                ? 'border-signal-400 text-fg'
-                : 'border-transparent text-fg-muted hover:text-fg'
-            }`}
-          >
-            <Key className="size-3.5 text-signal-400" />
-            <span>NASA FIRMS API Key (MAP_KEY)</span>
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {/* Active dataset info */}
-          <div className="flex items-center justify-between rounded-lg border border-line bg-ink-800/80 p-3 text-xs">
-            <div>
-              <span className="text-fg-faint">Currently Loaded: </span>
-              <span className="font-semibold text-fg">{metadata.title}</span>
-              <span className="text-fg-muted"> ({metadata.recordCount.toLocaleString()} records)</span>
-            </div>
-            {!metadata.isSynthetic && (
-              <button
-                type="button"
-                onClick={handleResetToDemo}
-                className="inline-flex items-center gap-1 text-ember-400 hover:text-ember-300 font-medium"
-              >
-                <RotateCcw className="size-3" />
-                Reset to Demo
-              </button>
-            )}
-          </div>
-
-          {/* TAB 1: File Upload (for DL_FIRE_M-C61 and DL_FIRE_SV-C2 folders) */}
-          {modalTab === 'file' && (
-            <div className="space-y-4">
-              {/* Guidance for the user's extracted folders */}
-              <div className="rounded-lg border border-signal-400/30 bg-signal-400/10 p-3 text-xs text-signal-300 space-y-1">
-                <p className="font-semibold text-fg flex items-center gap-1.5">
-                  <CheckCircle2 className="size-4 text-signal-400" />
-                  Your Extracted Folders are Ready to Load Directly:
-                </p>
-                <p className="text-[11px] leading-relaxed">
-                  The files you extracted in <code>e:\Nasa\DL_FIRE_M-C61_...</code> and <code>e:\Nasa\DL_FIRE_SV-C2_...</code> already contain official NASA data. Click <strong>&quot;Browse File&quot;</strong> below and select:
-                </p>
-                <ul className="list-disc pl-4 text-[11px] space-y-0.5 text-fg-muted">
-                  <li><code>e:\Nasa\DL_FIRE_M-C61_829743\fire_nrt_M-C61_829743.csv</code> (MODIS 1 km)</li>
-                  <li><code>e:\Nasa\DL_FIRE_SV-C2_829744\fire_nrt_SV-C2_829744.csv</code> (VIIRS 375 m)</li>
-                </ul>
-              </div>
-
-              {/* Drag & Drop Box */}
-              <div
-                onDragOver={(e) => {
-                  e.preventDefault()
-                  setIsDragging(true)
-                }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={handleDrop}
-                className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-colors ${
-                  isDragging
-                    ? 'border-ember-500 bg-ember-500/10'
-                    : 'border-line-strong bg-ink-950/60 hover:border-line'
-                }`}
-              >
-                <FileText className="size-8 text-fg-faint mb-2" aria-hidden="true" />
-                <p className="text-sm font-medium text-fg">
-                  Drag and drop a FIRMS CSV file here
-                </p>
-                <p className="text-xs text-fg-muted mt-1">
-                  Supports standard MODIS (1km) and VIIRS (375m) CSV formats
-                </p>
-                <label className="mt-3 cursor-pointer rounded-lg border border-line-strong bg-ink-800 px-4 py-1.5 text-xs font-semibold text-fg hover:bg-ink-700">
-                  Browse File
-                  <input
-                    type="file"
-                    accept=".csv,text/csv"
-                    onChange={handleFileChange}
-                    className="sr-only"
-                  />
-                </label>
-              </div>
-
-              {/* Or Paste Raw CSV Text */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label htmlFor="csv-raw-input" className="text-xs font-medium text-fg-muted">
-                    Or Paste CSV Content
-                  </label>
-                  <button
-                    type="button"
-                    onClick={handleLoadSample}
-                    className="text-xs text-signal-400 hover:text-signal-300"
-                  >
-                    Load Sample Test CSV
-                  </button>
-                </div>
-                <textarea
-                  id="csv-raw-input"
-                  rows={3}
-                  value={csvText}
-                  onChange={(e) => {
-                    setCsvText(e.target.value)
-                    if (e.target.value.trim()) {
-                      validatePreview(e.target.value, fileName)
-                    }
-                  }}
-                  placeholder="latitude,longitude,brightness,scan,track,acq_date,acq_time,satellite,instrument,confidence,version,bright_t31,frp,daynight..."
-                  className="w-full font-mono text-xs rounded-lg border border-line-strong bg-ink-950 p-3 text-fg placeholder:text-fg-faint focus:border-signal-400 focus:outline-none"
-                />
-              </div>
-            </div>
           )}
 
-          {/* TAB 2: NASA FIRMS Live API Key (MAP_KEY) */}
-          {modalTab === 'api' && (
+          {tab === 'file' && (
             <div className="space-y-4">
-              <div className="rounded-lg border border-line bg-ink-950 p-3.5 space-y-2 text-xs">
-                <div className="flex items-center gap-2 text-fg font-semibold">
-                  <Key className="size-4 text-signal-400" />
-                  <span>NASA FIRMS API Key Configuration:</span>
-                </div>
-                <p className="text-fg-muted leading-relaxed text-[11px]">
-                  Requests are securely routed through the server-side proxy so secrets are never exposed in client bundles.
-                </p>
-                <ol className="list-decimal pl-4 space-y-1 text-[11px] text-fg-faint">
-                  <li>
-                    <strong className="text-fg">Server environment (Recommended):</strong> Configure{' '}
-                    <code className="text-ember-400">NASA_FIRMS_MAP_KEY</code> in your server environment or{' '}
-                    <code className="text-ember-400">.env</code> file. No key entry is required below.
-                  </li>
-                  <li>
-                    <strong className="text-fg">Session key override:</strong> If not configured on the server, you may enter a 32-character key below for this session.
-                  </li>
-                </ol>
+              <div
+                onDragOver={(e: DragEvent) => {
+                  e.preventDefault()
+                  setDragging(true)
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e: DragEvent) => {
+                  e.preventDefault()
+                  setDragging(false)
+                  addFiles(e.dataTransfer.files)
+                }}
+                onClick={() => inputRef.current?.click()}
+                className={cn(
+                  'flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-8 text-center transition-colors',
+                  dragging ? 'border-ember-500 bg-ember-500/5' : 'border-line-strong hover:border-ink-500',
+                )}
+              >
+                <Upload className="size-6 text-ember-400" />
+                <p className="mt-2 text-sm font-medium text-fg">Drop FIRMS CSV files here, or click to browse</p>
+                <p className="mt-1 text-xs text-fg-muted">Add MODIS and VIIRS archives together to harmonize them. Up to {MAX_SAFE_BROWSER_RECORDS.toLocaleString()} rows per file.</p>
+                <input ref={inputRef} type="file" accept=".csv,text/csv" multiple className="hidden" onChange={(e) => addFiles(e.target.files)} />
               </div>
-
-              {/* API Form */}
-              <div className="space-y-3 rounded-xl border border-line-strong bg-ink-950/70 p-4 text-xs">
-                <div>
-                  <label htmlFor="map-key-input" className="block text-xs font-semibold text-fg mb-1">
-                    NASA FIRMS MAP_KEY (Optional session override)
-                  </label>
-                  <input
-                    type="password"
-                    id="map-key-input"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="Leave blank to use server NASA_FIRMS_MAP_KEY"
-                    className="w-full font-mono text-xs rounded-lg border border-line-strong bg-ink-900 px-3 py-2 text-fg placeholder:text-fg-faint focus:border-signal-400 focus:outline-none"
-                  />
-                  <p className="text-[10px] text-fg-faint mt-1">
-                    Don&apos;t have a key? Request a free key at{' '}
-                    <a
-                      href="https://firms.modaps.eosdis.nasa.gov/api/map_key/"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-signal-400 hover:underline"
-                    >
-                      firms.modaps.eosdis.nasa.gov/api/map_key/
-                    </a>
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label htmlFor="api-source-select" className="block text-xs font-medium text-fg-muted mb-1">
-                      Satellite Sensor / Product
-                    </label>
-                    <select
-                      id="api-source-select"
-                      value={apiSource}
-                      onChange={(e) =>
-                        setApiSource(
-                          e.target.value as 'VIIRS_SNPP_NRT' | 'MODIS_NRT' | 'VIIRS_NOAA20_NRT',
-                        )
-                      }
-                      className="w-full rounded-lg border border-line-strong bg-ink-900 px-3 py-1.5 text-xs text-fg focus:outline-none"
-                    >
-                      <option value="VIIRS_SNPP_NRT">VIIRS Suomi-NPP (375 m NRT)</option>
-                      <option value="MODIS_NRT">MODIS Terra &amp; Aqua (1 km NRT)</option>
-                      <option value="VIIRS_NOAA20_NRT">VIIRS NOAA-20 (375 m NRT)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label htmlFor="api-days-select" className="block text-xs font-medium text-fg-muted mb-1">
-                      Time Span (India)
-                    </label>
-                    <select
-                      id="api-days-select"
-                      value={apiDays}
-                      onChange={(e) => setApiDays(parseInt(e.target.value, 10))}
-                      className="w-full rounded-lg border border-line-strong bg-ink-900 px-3 py-1.5 text-xs text-fg focus:outline-none"
-                    >
-                      <option value={1}>Last 24 Hours (1 Day)</option>
-                      <option value={2}>Last 2 Days</option>
-                      <option value={3}>Last 3 Days</option>
-                      <option value={4}>Last 4 Days</option>
-                      <option value={5}>Last 5 Days (Max)</option>
-                    </select>
-                  </div>
-                </div>
-
+              {files.length > 0 && (
+                <ul className="divide-y divide-line rounded-xl border border-line">
+                  {files.map((f) => (
+                    <li key={f.name} className="flex items-center gap-3 px-3 py-2 text-xs">
+                      <FileSpreadsheet className="size-4 text-signal-400" />
+                      <span className="min-w-0 flex-1 truncate text-fg">{f.name}</span>
+                      <span className="text-fg-muted">
+                        {f.modis.toLocaleString()} MODIS · {f.viirs.toLocaleString()} VIIRS
+                      </span>
+                      <button type="button" aria-label={`Remove ${f.name}`} onClick={() => setFiles((p) => p.filter((x) => x.name !== f.name))} className="text-fg-faint hover:text-fg">
+                        <X className="size-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="flex items-center justify-between gap-2">
                 <button
                   type="button"
-                  onClick={handleFetchFromNasaApi}
-                  disabled={isLoadingApi || !apiKey.trim()}
-                  className="w-full flex items-center justify-center gap-2 rounded-lg bg-signal-500 py-2 text-xs font-semibold text-ink-950 hover:bg-signal-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  onClick={() => setFiles([{ name: 'sample_firms_subset.csv', text: SAMPLE_FIRMS_CSV, rows: 7, modis: 3, viirs: 4 }])}
+                  className="text-xs text-signal-400 hover:underline"
                 >
-                  {isLoadingApi ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" />
-                      <span>Querying NASA FIRMS API for India...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="size-4" />
-                      <span>Fetch Live Observations for India</span>
-                    </>
-                  )}
+                  Use a 7-row sample file
                 </button>
+                <Button variant="primary" onClick={applyFiles} disabled={files.length === 0}>
+                  Load {files.length > 1 ? `${files.length} files` : 'file'}
+                </Button>
               </div>
             </div>
           )}
 
-          {/* Status Message */}
-          {statusMessage && (
-            <div
-              className={`flex items-start gap-2.5 rounded-lg border p-3 text-xs ${
-                statusMessage.type === 'success'
-                  ? 'border-ok/40 bg-ok/10 text-ok'
-                  : 'border-danger/40 bg-danger/10 text-danger'
-              }`}
-            >
-              {statusMessage.type === 'success' ? (
-                <CheckCircle2 className="size-4 shrink-0 mt-0.5" />
-              ) : (
-                <AlertCircle className="size-4 shrink-0 mt-0.5" />
-              )}
-              <p className="leading-relaxed">{statusMessage.text}</p>
+          {tab === 'api' && (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-line bg-ink-800 p-3 text-xs">
+                <div className="text-fg-faint">Area query (west,south,east,north)</div>
+                <div className="mt-0.5 font-mono text-fg">{bbox}</div>
+                <div className="mt-1 text-fg-faint">{customAoi ? `from AOI “${customAoi.name}”` : `from ${area.name}`}</div>
+              </div>
+              <label className="block text-xs text-fg-muted">
+                Sensors
+                <select value={apiChoice} onChange={(e) => setApiChoice(e.target.value as typeof apiChoice)} className="field mt-1 w-full">
+                  {API_SOURCES.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-xs text-fg-muted">
+                Days of near-real-time data: <span className="text-fg">{apiDays}</span>
+                <input type="range" min={1} max={5} value={apiDays} onChange={(e) => setApiDays(Number(e.target.value))} className="mt-1 w-full" />
+              </label>
+              <label className="block text-xs text-fg-muted">
+                <span className="flex items-center gap-1.5">
+                  <Key className="size-3.5" /> FIRMS MAP_KEY (optional if the server has one)
+                </span>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="32-character key"
+                  autoComplete="off"
+                  className="field mt-1 w-full font-mono"
+                />
+              </label>
+              <p className="text-[11px] leading-relaxed text-fg-faint">
+                Requests go through the app's server proxy, so the key is never exposed in the page. Get a free key at firms.modaps.eosdis.nasa.gov/api/map_key.
+                Near-real-time data covers recent days only; use archive CSVs for multi-year calendars.
+              </p>
+              <div className="flex justify-end">
+                <Button variant="primary" onClick={fetchApi} disabled={loading}>
+                  {loading ? <Loader2 className="size-4 animate-spin" /> : <Satellite className="size-4" />}
+                  Fetch from FIRMS
+                </Button>
+              </div>
             </div>
           )}
-        </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between border-t border-line px-6 py-3.5 bg-ink-950">
-          <button
-            type="button"
-            onClick={handleResetToDemo}
-            className="inline-flex items-center gap-1.5 text-xs text-fg-muted hover:text-fg"
-          >
-            <Database className="size-3.5 text-ember-400" />
-            Restore 1,500 Demo Observations
-          </button>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setIsCsvModalOpen(false)}
-              className="rounded-lg border border-line bg-ink-800 px-3.5 py-1.5 text-xs font-semibold text-fg hover:bg-ink-700"
+          {status && (
+            <div
+              role="status"
+              className={cn(
+                'mt-4 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs',
+                status.type === 'error' ? 'border-red-500/30 bg-red-500/10 text-red-200' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+              )}
             >
-              Close
-            </button>
-            {modalTab === 'file' && (
-              <button
-                type="button"
-                onClick={handleApply}
-                disabled={!csvText.trim()}
-                className="rounded-lg bg-ember-500 px-4 py-1.5 text-xs font-semibold text-ink-950 hover:bg-ember-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                Apply CSV
-              </button>
-            )}
-          </div>
+              {status.type === 'error' ? <AlertCircle className="mt-px size-4 shrink-0" /> : <CheckCircle2 className="mt-px size-4 shrink-0" />}
+              {status.text}
+            </div>
+          )}
         </div>
       </div>
     </div>

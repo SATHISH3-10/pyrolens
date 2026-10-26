@@ -86,7 +86,7 @@ describe('14. Server-Side NASA FIRMS Proxy (api/firms/live)', () => {
     expect(json.error).toContain('Invalid satellite source')
   })
 
-  it('validates days parameter range (must be between 1 and 10)', async () => {
+  it('validates days parameter range (must be between 1 and 5)', async () => {
     const req = {
       url: '/api/firms/live?source=VIIRS_SNPP_NRT&days=99&area=68,8,97,37',
       headers: {

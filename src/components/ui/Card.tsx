@@ -1,5 +1,6 @@
 import type { ElementType, HTMLAttributes, ReactNode } from 'react'
 import { cn } from '@/lib'
+import { InfoTip } from './InfoTip'
 
 interface CardProps extends HTMLAttributes<HTMLElement> {
   as?: ElementType
@@ -9,7 +10,7 @@ interface CardProps extends HTMLAttributes<HTMLElement> {
   emphasis?: boolean
 }
 
-const PADDING = { none: '', sm: 'p-4', md: 'p-5 sm:p-6' } as const
+const PADDING = { none: '', sm: 'p-4', md: 'p-5' } as const
 
 export function Card({
   as: Tag = 'section',
@@ -22,7 +23,7 @@ export function Card({
   return (
     <Tag
       className={cn(
-        'rounded-xl border bg-ink-800 shadow-panel',
+        'rounded-2xl border bg-ink-850 shadow-panel',
         emphasis ? 'border-ember-500/40 shadow-glow-ember' : 'border-line',
         PADDING[padding],
         className,
@@ -36,22 +37,25 @@ export function Card({
 
 interface CardHeaderProps {
   title: string
-  description?: string
+  description?: ReactNode
   action?: ReactNode
+  info?: ReactNode
   /** Heading element id, so a parent <section> can use aria-labelledby. */
   id?: string
+  className?: string
 }
 
-export function CardHeader({ title, description, action, id }: CardHeaderProps) {
+export function CardHeader({ title, description, action, info, id, className }: CardHeaderProps) {
   return (
-    <div className="mb-4 flex items-start justify-between gap-4">
+    <div className={cn('mb-4 flex flex-wrap items-start justify-between gap-3', className)}>
       <div className="min-w-0">
-        <h3 id={id} className="text-sm font-semibold text-fg">
+        <h3 id={id} className="flex items-center gap-1.5 text-sm font-semibold text-fg">
           {title}
+          {info && <InfoTip align="start">{info}</InfoTip>}
         </h3>
-        {description && <p className="mt-1 text-sm text-fg-muted">{description}</p>}
+        {description && <p className="mt-0.5 text-xs leading-relaxed text-fg-muted">{description}</p>}
       </div>
-      {action && <div className="shrink-0">{action}</div>}
+      {action && <div className="flex shrink-0 flex-wrap items-center gap-2">{action}</div>}
     </div>
   )
 }

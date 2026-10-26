@@ -13,27 +13,54 @@ import type {
   ObservationFilter,
   SummaryMetrics,
 } from '@/types/fire'
-import { generateSyntheticObservations } from '@/data/syntheticData'
+import type { ActivityAnalysis, BaiWeights } from '@/types/activity'
 import { parseFirmsCsv } from '@/data/firmsCsvImporter'
+import { generateAreaArchive } from '@/data/demoArchive'
+import { DEFAULT_STUDY_AREA_ID, getStudyArea, type StudyArea } from '@/data/studyAreas'
 import { calculateSummaryMetrics, filterObservations } from '@/utils/aggregation'
+import { analyzeBurningActivity, DEFAULT_BAI_WEIGHTS } from '@/utils/burningActivity'
+
+export const IMPORTED_AREA_ID = 'imported'
+
+/** Geographic frame for the active dataset: a preset study area or the extent of an imported file. */
+export interface AreaFrame {
+  id: string
+  name: string
+  subtitle: string
+  bounds: StudyArea['bounds']
+  center: [number, number]
+  zoom: number
+  preset: StudyArea | null
+}
 
 interface FireDataContextValue {
   observations: FireObservation[]
   metadata: DatasetMeta
+  area: AreaFrame
+  studyAreaId: string
+  setStudyAreaId: (id: string) => void
   filter: ObservationFilter
   setFilter: (patch: Partial<ObservationFilter>) => void
   resetFilter: () => void
   customAoi: CustomAoi | null
   setCustomAoi: (aoi: CustomAoi | null) => void
   clearCustomAoi: () => void
+  /** Detections inside the active area / AOI, all dates and sensors (input to the BAI pipeline). */
+  areaObservations: FireObservation[]
+  /** Detections matching every active filter (dates, sensor, pass, AOI). */
   filteredObservations: FireObservation[]
   summaryMetrics: SummaryMetrics
+  analysis: ActivityAnalysis | null
+  baiWeights: BaiWeights
+  setBaiWeights: (w: BaiWeights) => void
+  selectedDate: string | null
+  setSelectedDate: (date: string | null) => void
   selectedObservation: FireObservation | undefined
   selectedObservationId: string | null
   setSelectedObservationId: (id: string | null) => void
   loadSyntheticData: () => void
   importCsvContent: (
-    csvText: string,
+    csvText: string | string[],
     fileName?: string,
     provenance?: 'imported-firms-csv' | 'firms-live-api',
   ) => { success: boolean; message: string; warnings?: string[] }
@@ -43,46 +70,106 @@ interface FireDataContextValue {
 
 const FireDataContext = createContext<FireDataContextValue | null>(null)
 
-// Initialize default synthetic dataset
-const initialSynthetic = generateSyntheticObservations(1500)
-const initialDates = Array.from(new Set(initialSynthetic.map((o) => o.acqDate))).sort()
-const initialModis = initialSynthetic.filter((o) => o.instrument === 'MODIS').length
-const initialViirs = initialSynthetic.filter((o) => o.instrument === 'VIIRS').length
-
-const initialMeta: DatasetMeta = {
-  source: 'synthetic-demo',
-  isSynthetic: true,
-  title: 'Synthetic Demonstration Dataset (India 2024)',
-  recordCount: initialSynthetic.length,
-  modisCount: initialModis,
-  viirsCount: initialViirs,
-  distinctDatesCount: initialDates.length,
-  dateRange: {
-    start: initialDates[0] ?? '2024-01-01',
-    end: initialDates[initialDates.length - 1] ?? '2024-12-31',
-  },
-  loadedAt: new Date().toISOString(),
-  duplicateCount: 0,
+function buildMeta(
+  data: readonly FireObservation[],
+  source: DatasetMeta['source'],
+  title: string,
+  extra: Partial<DatasetMeta> = {},
+): DatasetMeta {
+  let modis = 0
+  let start = '9999-12-31'
+  let end = '0000-01-01'
+  const dates = new Set<string>()
+  for (const o of data) {
+    if (o.instrument === 'MODIS') modis++
+    dates.add(o.acqDate)
+    if (o.acqDate < start) start = o.acqDate
+    if (o.acqDate > end) end = o.acqDate
+  }
+  return {
+    source,
+    isSynthetic: source === 'synthetic-demo',
+    title,
+    recordCount: data.length,
+    modisCount: modis,
+    viirsCount: data.length - modis,
+    distinctDatesCount: dates.size,
+    dateRange: { start: data.length ? start : '', end: data.length ? end : '' },
+    loadedAt: new Date().toISOString(),
+    duplicateCount: 0,
+    ...extra,
+  }
 }
 
-export function FireDataProvider({ children }: { children: ReactNode }) {
-  const [observations, setObservations] = useState<FireObservation[]>(initialSynthetic)
-  const [metadata, setMetadata] = useState<DatasetMeta>(initialMeta)
-  const [selectedObservationId, setSelectedObservationId] = useState<string | null>(null)
-  const [isCsvModalOpen, setIsCsvModalOpen] = useState(false)
-  const [customAoi, setCustomAoiState] = useState<CustomAoi | null>(null)
-
-  const [filter, setFilterState] = useState<ObservationFilter>({
+function defaultFilter(meta: DatasetMeta): ObservationFilter {
+  return {
     sensor: 'ALL',
-    metricType: 'harmonized', // Harmonized Grid Activity Index by default
-    startDate: initialMeta.dateRange.start,
-    endDate: initialMeta.dateRange.end,
+    metricType: 'harmonized',
+    startDate: meta.dateRange.start,
+    endDate: meta.dateRange.end,
     regionId: 'all',
     customPolygon: undefined,
     daynight: 'ALL',
     minFrp: 0,
     gridResolution: 0.25,
-  })
+  }
+}
+
+function frameFromData(data: readonly FireObservation[], name: string): AreaFrame {
+  let minLat = 90
+  let maxLat = -90
+  let minLng = 180
+  let maxLng = -180
+  for (const o of data) {
+    if (o.latitude < minLat) minLat = o.latitude
+    if (o.latitude > maxLat) maxLat = o.latitude
+    if (o.longitude < minLng) minLng = o.longitude
+    if (o.longitude > maxLng) maxLng = o.longitude
+  }
+  const span = Math.max(maxLat - minLat, maxLng - minLng, 0.5)
+  const zoom = Math.max(3, Math.min(10, Math.round(8 - Math.log2(span))))
+  return {
+    id: IMPORTED_AREA_ID,
+    name,
+    subtitle: 'Imported FIRMS data',
+    bounds: { minLat, maxLat, minLng, maxLng },
+    center: [(minLat + maxLat) / 2, (minLng + maxLng) / 2],
+    zoom,
+    preset: null,
+  }
+}
+
+function frameFromPreset(area: StudyArea): AreaFrame {
+  return {
+    id: area.id,
+    name: area.name,
+    subtitle: area.country,
+    bounds: area.bounds,
+    center: area.center,
+    zoom: area.zoom,
+    preset: area,
+  }
+}
+
+function loadPreset(id: string) {
+  const area = getStudyArea(id) ?? getStudyArea(DEFAULT_STUDY_AREA_ID)!
+  const data = generateAreaArchive(area.id)
+  const meta = buildMeta(data, 'synthetic-demo', `Demo archive · ${area.name}`)
+  return { area, data, meta }
+}
+
+const initial = loadPreset(DEFAULT_STUDY_AREA_ID)
+
+export function FireDataProvider({ children }: { children: ReactNode }) {
+  const [observations, setObservations] = useState<FireObservation[]>(initial.data)
+  const [metadata, setMetadata] = useState<DatasetMeta>(initial.meta)
+  const [area, setArea] = useState<AreaFrame>(frameFromPreset(initial.area))
+  const [selectedObservationId, setSelectedObservationId] = useState<string | null>(null)
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState(false)
+  const [customAoi, setCustomAoiState] = useState<CustomAoi | null>(null)
+  const [baiWeights, setBaiWeights] = useState<BaiWeights>(DEFAULT_BAI_WEIGHTS)
+  const [filter, setFilterState] = useState<ObservationFilter>(defaultFilter(initial.meta))
 
   const setFilter = useCallback((patch: Partial<ObservationFilter>) => {
     setFilterState((prev) => ({ ...prev, ...patch }))
@@ -91,152 +178,148 @@ export function FireDataProvider({ children }: { children: ReactNode }) {
   const setCustomAoi = useCallback((aoi: CustomAoi | null) => {
     setCustomAoiState(aoi)
     if (aoi) {
-      setFilterState((prev) => ({
-        ...prev,
-        regionId: 'custom',
-        customPolygon: aoi.points,
-      }))
+      setFilterState((prev) => ({ ...prev, regionId: 'custom', customPolygon: aoi.points }))
     }
   }, [])
 
   const clearCustomAoi = useCallback(() => {
     setCustomAoiState(null)
-    setFilterState((prev) => ({
-      ...prev,
-      regionId: 'all',
-      customPolygon: undefined,
-    }))
+    setFilterState((prev) => ({ ...prev, regionId: 'all', customPolygon: undefined }))
+  }, [])
+
+  const resetDatasetState = useCallback((meta: DatasetMeta) => {
+    setCustomAoiState(null)
+    setFilterState(defaultFilter(meta))
+    setSelectedObservationId(null)
+    setSelectedDate(null)
   }, [])
 
   const resetFilter = useCallback(() => {
-    setCustomAoiState(null)
-    setFilterState({
-      sensor: 'ALL',
-      metricType: 'harmonized',
-      startDate: metadata.dateRange.start,
-      endDate: metadata.dateRange.end,
-      regionId: 'all',
-      customPolygon: undefined,
-      daynight: 'ALL',
-      minFrp: 0,
-      gridResolution: 0.25,
-    })
-    setSelectedObservationId(null)
-  }, [metadata.dateRange.start, metadata.dateRange.end])
+    resetDatasetState(metadata)
+  }, [metadata, resetDatasetState])
+
+  const setStudyAreaId = useCallback(
+    (id: string) => {
+      const next = loadPreset(id)
+      setObservations(next.data)
+      setMetadata(next.meta)
+      setArea(frameFromPreset(next.area))
+      resetDatasetState(next.meta)
+    },
+    [resetDatasetState],
+  )
 
   const loadSyntheticData = useCallback(() => {
-    const data = generateSyntheticObservations(1500)
-    const dates = Array.from(new Set(data.map((o) => o.acqDate))).sort()
-    const modis = data.filter((o) => o.instrument === 'MODIS').length
-    const viirs = data.filter((o) => o.instrument === 'VIIRS').length
-
-    const meta: DatasetMeta = {
-      source: 'synthetic-demo',
-      isSynthetic: true,
-      title: 'Synthetic Demonstration Dataset (India 2024)',
-      recordCount: data.length,
-      modisCount: modis,
-      viirsCount: viirs,
-      distinctDatesCount: dates.length,
-      dateRange: {
-        start: dates[0] ?? '2024-01-01',
-        end: dates[dates.length - 1] ?? '2024-12-31',
-      },
-      loadedAt: new Date().toISOString(),
-      duplicateCount: 0,
-    }
-
-    setObservations(data)
-    setMetadata(meta)
-    setCustomAoiState(null)
-    setFilterState({
-      sensor: 'ALL',
-      metricType: 'harmonized',
-      startDate: meta.dateRange.start,
-      endDate: meta.dateRange.end,
-      regionId: 'all',
-      customPolygon: undefined,
-      daynight: 'ALL',
-      minFrp: 0,
-      gridResolution: 0.25,
-    })
-    setSelectedObservationId(null)
-  }, [])
+    setStudyAreaId(area.preset?.id ?? DEFAULT_STUDY_AREA_ID)
+  }, [area.preset, setStudyAreaId])
 
   const importCsvContent = useCallback(
     (
-      csvText: string,
+      csvText: string | string[],
       fileName = 'custom_firms_import.csv',
       provenance: 'imported-firms-csv' | 'firms-live-api' = 'imported-firms-csv',
     ) => {
-      const result = parseFirmsCsv(csvText, fileName)
-      if (!result.success || result.observations.length === 0) {
-        return {
-          success: false,
-          message: result.error || 'Failed to parse CSV file.',
+      // Several files (e.g. separate MODIS and VIIRS downloads) are parsed independently and merged.
+      const texts = Array.isArray(csvText) ? csvText : [csvText]
+      const merged: FireObservation[] = []
+      const seen = new Set<string>()
+      const warnings: string[] = []
+      let duplicates = 0
+      let rejected = 0
+      let lastError = ''
+      texts.forEach((text, i) => {
+        const result = parseFirmsCsv(text, texts.length > 1 ? `${fileName}#${i + 1}` : fileName)
+        if (!result.success) {
+          lastError = result.error || 'Failed to parse CSV file.'
+          return
         }
-      }
-
-      // Update provenance
-      const finalObs = result.observations.map((o) => ({ ...o, provenance }))
-      const updatedMeta: DatasetMeta = {
-        ...result.metadata,
-        source: provenance,
-      }
-
-      setObservations(finalObs)
-      setMetadata(updatedMeta)
-      setCustomAoiState(null)
-      setFilterState({
-        sensor: 'ALL',
-        metricType: 'harmonized',
-        startDate: result.metadata.dateRange.start,
-        endDate: result.metadata.dateRange.end,
-        regionId: 'all',
-        customPolygon: undefined,
-        daynight: 'ALL',
-        minFrp: 0,
-        gridResolution: 0.25,
+        warnings.push(...result.warnings)
+        duplicates += result.duplicateCount
+        rejected += result.rejectedCount
+        for (const o of result.observations) {
+          const key = `${o.satellite}|${o.acqDate}|${o.acqTime}|${o.latitude}|${o.longitude}`
+          if (seen.has(key)) {
+            duplicates++
+            continue
+          }
+          seen.add(key)
+          merged.push({ ...o, id: `${o.instrument[0]}${merged.length + 1}`, provenance })
+        }
       })
-      setSelectedObservationId(null)
+      if (merged.length === 0) {
+        return { success: false, message: lastError || 'No valid detections found.' }
+      }
+      const name = fileName.replace(/\.[^/.]+$/, '')
+      const meta = buildMeta(merged, provenance, name, { fileName, duplicateCount: duplicates, rejectedCount: rejected })
+      setObservations(merged)
+      setMetadata(meta)
+      setArea(frameFromData(merged, name))
+      resetDatasetState(meta)
 
-      const dupeMsg = result.duplicateCount > 0 ? ` (${result.duplicateCount} duplicates omitted)` : ''
-      const rejectMsg = result.rejectedCount > 0 ? ` (${result.rejectedCount} invalid rows rejected)` : ''
-
+      const dupeMsg = duplicates > 0 ? ` (${duplicates} duplicates omitted)` : ''
+      const rejectMsg = rejected > 0 ? ` (${rejected} invalid rows rejected)` : ''
       return {
         success: true,
-        message: `Successfully loaded ${result.observations.length.toLocaleString()} active-fire records from ${fileName}.${dupeMsg}${rejectMsg}`,
-        warnings: result.warnings,
+        message: `Loaded ${merged.length.toLocaleString()} detections from ${fileName}.${dupeMsg}${rejectMsg}`,
+        warnings,
       }
     },
-    [],
+    [resetDatasetState],
   )
 
-  const filteredObservations = useMemo(() => {
-    return filterObservations(observations, filter)
-  }, [observations, filter])
+  const areaObservations = useMemo(
+    () =>
+      filterObservations(observations, {
+        sensor: 'ALL',
+        startDate: '',
+        endDate: '',
+        regionId: filter.regionId,
+        customPolygon: filter.customPolygon,
+      }),
+    [observations, filter.regionId, filter.customPolygon],
+  )
 
-  const summaryMetrics = useMemo(() => {
-    return calculateSummaryMetrics(filteredObservations, filter.gridResolution ?? 0.25)
-  }, [filteredObservations, filter.gridResolution])
+  const filteredObservations = useMemo(
+    () => filterObservations(observations, filter),
+    [observations, filter],
+  )
+
+  const summaryMetrics = useMemo(
+    () => calculateSummaryMetrics(filteredObservations, filter.gridResolution ?? 0.25),
+    [filteredObservations, filter.gridResolution],
+  )
+
+  const analysis = useMemo(
+    () => analyzeBurningActivity(areaObservations, baiWeights),
+    [areaObservations, baiWeights],
+  )
 
   const selectedObservation = useMemo(() => {
     if (!selectedObservationId) return undefined
     return observations.find((o) => o.id === selectedObservationId)
   }, [observations, selectedObservationId])
 
-  const value = useMemo(
+  const value = useMemo<FireDataContextValue>(
     () => ({
       observations,
       metadata,
+      area,
+      studyAreaId: area.id,
+      setStudyAreaId,
       filter,
       setFilter,
       resetFilter,
       customAoi,
       setCustomAoi,
       clearCustomAoi,
+      areaObservations,
       filteredObservations,
       summaryMetrics,
+      analysis,
+      baiWeights,
+      setBaiWeights,
+      selectedDate,
+      setSelectedDate,
       selectedObservation,
       selectedObservationId,
       setSelectedObservationId,
@@ -248,14 +331,20 @@ export function FireDataProvider({ children }: { children: ReactNode }) {
     [
       observations,
       metadata,
+      area,
+      setStudyAreaId,
       filter,
       setFilter,
       resetFilter,
       customAoi,
       setCustomAoi,
       clearCustomAoi,
+      areaObservations,
       filteredObservations,
       summaryMetrics,
+      analysis,
+      baiWeights,
+      selectedDate,
       selectedObservation,
       selectedObservationId,
       loadSyntheticData,

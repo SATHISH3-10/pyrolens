@@ -66,12 +66,12 @@ function firmsBackendProxy(serverEnvKey?: string): Plugin {
       }
 
       const days = parseInt(daysStr, 10)
-      if (isNaN(days) || days < 1 || days > 10) {
+      if (isNaN(days) || days < 1 || days > 5) {
         res.statusCode = 400
         res.setHeader('Content-Type', 'application/json')
         res.end(
           JSON.stringify({
-            error: 'Invalid days parameter. Must be an integer between 1 and 10.',
+            error: 'Invalid days parameter. Must be an integer between 1 and 5 (FIRMS Area API limit).',
           }),
         )
         return
