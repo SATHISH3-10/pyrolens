@@ -13,7 +13,7 @@ PyroLens combines historical MODIS and VIIRS active-fire hotspots into one consi
 | Page | Purpose |
 | --- | --- |
 | **Dashboard** | Critical Period Outlook, key numbers, typical fire season, compact calendar, seasonal pattern vs normal, annual harmonized activity, most severe critical periods and unusual seasons. |
-| **Fire Map** | Full-screen Leaflet map: hotspots by sensor, fire-cluster hulls, density grid; day / 7-day / 30-day / range windows; timeline scrubber with playback; draw rectangle or polygon AOIs, import/export GeoJSON; dark, light or satellite basemaps. |
+| **Fire Map** | Full-screen MapLibre + deck.gl map: every filtered hotspot coloured by detection age (relative to the playback time) or FRP, confidence as solid/translucent/hollow; fire-cluster polygons; density heatmap (count, FRP or clusters); day / 24 h / 48 h / 7-day / all windows with 1/3/7-days-per-second playback; filters for satellite, confidence, FRP and day/night; rectangle or polygon AOIs with GeoJSON import/export; CARTO dark/light, Esri satellite, and NASA GIBS true-colour imagery for the selected date. |
 | **Burning Calendar** | Years × days/weeks/months heatmap coloured by BAI class, with anomaly and critical-period highlight modes, hatched limited-observation days, configurable BAI weights, daily time series with normal band and 97th-percentile line, fire-season table and a day detail panel with a plain-language explanation and mini map. |
 | **Harmonization** | Monthly VIIRS:MODIS factors r(m) with IQR, out-of-sample validation, raw vs harmonized record across the 2012 sensor change, factor table. |
 | **Reports & Export** | Daily BAI CSV, fire clusters GeoJSON, filtered hotspots CSV/GeoJSON, calendar PNG, printable PDF report, Markdown summary, harmonization factors CSV. |
@@ -61,7 +61,7 @@ src/
 api/firms/live.ts           serverless FIRMS Area API proxy (keeps MAP_KEY server-side)
 ```
 
-Stack: React 19, TypeScript (strict), Vite, Tailwind CSS 4, Leaflet / React-Leaflet, Recharts, Vitest. Everything runs in the browser; the only server piece is the FIRMS proxy (a Vite middleware in development, `api/firms/live.ts` on Vercel).
+Stack: React 19, TypeScript (strict), Vite, Tailwind CSS 4 (light/dark theme tokens), MapLibre GL 6 + react-map-gl 8 + deck.gl 9, Recharts, Vitest. Everything runs in the browser; the only server piece is the FIRMS proxy (a Vite middleware in development, `api/firms/live.ts` on Vercel).
 
 ---
 
