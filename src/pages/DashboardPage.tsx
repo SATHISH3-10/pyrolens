@@ -129,9 +129,9 @@ export default function DashboardPage() {
               value={fmtCompact(stats.modis + stats.viirs)}
               hint={
                 <span>
-                  <span style={{ color: SENSOR_COLORS.MODIS }}>MODIS {fmtCompact(stats.modis)}</span>
+                  <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="size-2 rounded-full" style={{ background: SENSOR_COLORS.MODIS }} />MODIS {fmtCompact(stats.modis)}</span>
                   {' · '}
-                  <span style={{ color: SENSOR_COLORS.VIIRS }}>VIIRS {fmtCompact(stats.viirs)}</span>
+                  <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="size-2 rounded-full" style={{ background: SENSOR_COLORS.VIIRS }} />VIIRS {fmtCompact(stats.viirs)}</span>
                 </span>
               }
               info="Raw hotspot counts are shown for reference only — they cannot be added or compared across sensors."
@@ -155,7 +155,7 @@ export default function DashboardPage() {
                 stats.peak ? (
                   <span>
                     BAI {stats.peak.bai.toFixed(0)} ·{' '}
-                    <span style={{ color: ACTIVITY_COLORS[stats.peak.cls] }}>{CLASS_LABEL[stats.peak.cls]}</span>
+                    <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="size-2 rounded-full" style={{ background: ACTIVITY_COLORS[stats.peak.cls] }} />{CLASS_LABEL[stats.peak.cls]}</span>
                   </span>
                 ) : undefined
               }

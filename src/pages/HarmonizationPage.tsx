@@ -19,12 +19,15 @@ import { Download, GitCompareArrows } from 'lucide-react'
 import { useFireData } from '@/context/FireDataContext'
 import { Button, Card, CardHeader, EmptyState, PageHeader, Stat } from '@/components/ui'
 import { SENSOR_COLORS } from '@/components/viz/activityScale'
-import { AXIS_STROKE, AXIS_TICK, GRID_STROKE, TOOLTIP_STYLE } from '@/components/viz/chartTheme'
+import { chartStyles } from '@/components/viz/chartTheme'
+import { useTheme } from '@/context/ThemeContext'
 import { exportHarmonizationCsv } from '@/utils/exportActivity'
 import { fmtCompact, fmtDate, fmtNum, monthName } from '@/lib'
 
 export default function HarmonizationPage() {
   const { analysis, area } = useFireData()
+  const { tokens } = useTheme()
+  const cs = chartStyles(tokens)
 
   const monthly = useMemo(() => {
     if (!analysis) return []
@@ -139,20 +142,20 @@ export default function HarmonizationPage() {
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={factors} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
-                <CartesianGrid stroke={GRID_STROKE} vertical={false} />
-                <XAxis dataKey="month" tick={AXIS_TICK} axisLine={{ stroke: AXIS_STROKE }} tickLine={false} />
-                <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={44} domain={[0, 'auto']} />
+                <CartesianGrid stroke={cs.grid} vertical={false} />
+                <XAxis dataKey="month" tick={cs.tick} axisLine={{ stroke: cs.axis }} tickLine={false} />
+                <YAxis tick={cs.tick} axisLine={false} tickLine={false} width={44} domain={[0, 'auto']} />
                 <Tooltip
-                  {...TOOLTIP_STYLE}
+                  {...cs.tooltip}
                   cursor={{ fill: 'rgba(255,255,255,0.04)' }}
                   formatter={(v, _n, item) => {
                     const p = item.payload as (typeof factors)[number]
                     return [`${Number(v).toFixed(2)}× (IQR ${(p.r - p.err[0]).toFixed(2)}–${(p.r + p.err[1]).toFixed(2)}, ${p.samples} yrs${p.fallback ? ', pooled fallback' : ''})`, 'r(m)']
                   }}
                 />
-                <ReferenceLine y={model.pooledCountRatio} stroke="#a1a9b6" strokeDasharray="5 4" label={{ value: `pooled ${model.pooledCountRatio.toFixed(2)}`, fill: '#a1a9b6', fontSize: 10, position: 'insideTopRight' }} />
-                <Bar dataKey="r" fill={SENSOR_COLORS.harmonized} radius={[4, 4, 0, 0]} isAnimationActive={false} barSize={22}>
-                  <ErrorBar dataKey="err" direction="y" stroke="#eceef2" strokeWidth={1.2} width={5} />
+                <ReferenceLine y={model.pooledCountRatio} stroke={tokens.textMuted} strokeDasharray="5 4" label={{ value: `pooled ${model.pooledCountRatio.toFixed(2)}`, fill: tokens.textMuted, fontSize: 10, position: 'insideTopRight' }} />
+                <Bar dataKey="r" fill={tokens.sensors.harmonized} radius={[4, 4, 0, 0]} isAnimationActive={false} barSize={22}>
+                  <ErrorBar dataKey="err" direction="y" stroke={tokens.text} strokeWidth={1.2} width={5} />
                 </Bar>
               </ComposedChart>
             </ResponsiveContainer>
@@ -167,12 +170,12 @@ export default function HarmonizationPage() {
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 12, bottom: 12, left: -8 }}>
-                <CartesianGrid stroke={GRID_STROKE} />
-                <XAxis type="number" dataKey="observed" name="Observed" tick={AXIS_TICK} axisLine={{ stroke: AXIS_STROKE }} tickLine={false} domain={[0, Math.ceil(vMax)]} tickFormatter={fmtCompact} label={{ value: 'VIIRS observed', fill: '#6c7584', fontSize: 11, position: 'insideBottom', offset: -6 }} />
-                <YAxis type="number" dataKey="predicted" name="Predicted" tick={AXIS_TICK} axisLine={false} tickLine={false} domain={[0, Math.ceil(vMax)]} tickFormatter={fmtCompact} width={48} />
+                <CartesianGrid stroke={cs.grid} />
+                <XAxis type="number" dataKey="observed" name="Observed" tick={cs.tick} axisLine={{ stroke: cs.axis }} tickLine={false} domain={[0, Math.ceil(vMax)]} tickFormatter={fmtCompact} label={{ value: 'VIIRS observed', fill: tokens.textFaint, fontSize: 11, position: 'insideBottom', offset: -6 }} />
+                <YAxis type="number" dataKey="predicted" name="Predicted" tick={cs.tick} axisLine={false} tickLine={false} domain={[0, Math.ceil(vMax)]} tickFormatter={fmtCompact} width={48} />
                 <ZAxis range={[28, 28]} />
                 <Tooltip
-                  {...TOOLTIP_STYLE}
+                  {...cs.tooltip}
                   formatter={(v, n) => [fmtNum(Number(v), 1), String(n)]}
                   labelFormatter={() => ''}
                 />
@@ -181,10 +184,10 @@ export default function HarmonizationPage() {
                     { x: 0, y: 0 },
                     { x: Math.ceil(vMax), y: Math.ceil(vMax) },
                   ]}
-                  stroke="#6c7584"
+                  stroke={tokens.textFaint}
                   strokeDasharray="4 4"
                 />
-                <Scatter data={validation} fill={SENSOR_COLORS.VIIRS} fillOpacity={0.7} isAnimationActive={false} />
+                <Scatter data={validation} fill={tokens.sensors.VIIRS} fillOpacity={0.7} isAnimationActive={false} />
               </ScatterChart>
             </ResponsiveContainer>
           </div>
@@ -206,20 +209,20 @@ export default function HarmonizationPage() {
         <div className="h-72">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={monthly} margin={{ top: 8, right: 8, bottom: 0, left: -8 }}>
-              <CartesianGrid stroke={GRID_STROKE} vertical={false} />
-              <XAxis dataKey="key" tick={AXIS_TICK} axisLine={{ stroke: AXIS_STROKE }} tickLine={false} minTickGap={48} tickFormatter={(k: string) => k.slice(0, 4)} />
-              <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} tickFormatter={fmtCompact} width={48} />
+              <CartesianGrid stroke={cs.grid} vertical={false} />
+              <XAxis dataKey="key" tick={cs.tick} axisLine={{ stroke: cs.axis }} tickLine={false} minTickGap={48} tickFormatter={(k: string) => k.slice(0, 4)} />
+              <YAxis tick={cs.tick} axisLine={false} tickLine={false} tickFormatter={fmtCompact} width={48} />
               <Tooltip
-                {...TOOLTIP_STYLE}
+                {...cs.tooltip}
                 formatter={(v, n) => [v === null ? '—' : fmtNum(Number(v), 1), n === 'modis' ? 'MODIS raw' : n === 'viirs' ? 'VIIRS raw' : 'Harmonized']}
               />
               {model.viirsStart && (
-                <ReferenceLine x={model.viirsStart.slice(0, 7)} stroke="#a1a9b6" strokeDasharray="4 4" label={{ value: 'VIIRS starts', fill: '#a1a9b6', fontSize: 10, position: 'insideTopLeft' }} />
+                <ReferenceLine x={model.viirsStart.slice(0, 7)} stroke={tokens.textMuted} strokeDasharray="4 4" label={{ value: 'VIIRS starts', fill: tokens.textMuted, fontSize: 10, position: 'insideTopLeft' }} />
               )}
               {/* Harmonized drawn first as a wide translucent band: after VIIRS starts it equals raw VIIRS. */}
-              <Line dataKey="harmonized" stroke={SENSOR_COLORS.harmonized} strokeOpacity={0.45} strokeWidth={4} dot={false} isAnimationActive={false} />
-              <Line dataKey="modis" stroke={SENSOR_COLORS.MODIS} strokeWidth={1.2} dot={false} isAnimationActive={false} connectNulls={false} />
-              <Line dataKey="viirs" stroke={SENSOR_COLORS.VIIRS} strokeWidth={1.2} dot={false} isAnimationActive={false} connectNulls={false} />
+              <Line dataKey="harmonized" stroke={tokens.sensors.harmonized} strokeOpacity={0.45} strokeWidth={4} dot={false} isAnimationActive={false} />
+              <Line dataKey="modis" stroke={tokens.sensors.MODIS} strokeWidth={1.2} dot={false} isAnimationActive={false} connectNulls={false} />
+              <Line dataKey="viirs" stroke={tokens.sensors.VIIRS} strokeWidth={1.2} dot={false} isAnimationActive={false} connectNulls={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -269,8 +272,8 @@ export default function HarmonizationPage() {
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wider text-fg-faint">
                 <th className="pb-2 font-medium" />
-                <th className="pb-2 font-medium" style={{ color: SENSOR_COLORS.MODIS }}>MODIS</th>
-                <th className="pb-2 font-medium" style={{ color: SENSOR_COLORS.VIIRS }}>VIIRS</th>
+                <th className="pb-2 font-medium"><span className="mr-1.5 inline-block size-2 rounded-full" style={{ background: SENSOR_COLORS.MODIS }} />MODIS</th>
+                <th className="pb-2 font-medium"><span className="mr-1.5 inline-block size-2 rounded-full" style={{ background: SENSOR_COLORS.VIIRS }} />VIIRS</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line text-fg-muted">

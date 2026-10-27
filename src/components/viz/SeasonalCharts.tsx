@@ -16,7 +16,8 @@ import {
 import type { ActivityAnalysis } from '@/types/activity'
 import { fmtCompact, fmtNum, monthName } from '@/lib'
 import { SENSOR_COLORS } from './activityScale'
-import { AXIS_STROKE, AXIS_TICK, GRID_STROKE, TOOLTIP_STYLE } from './chartTheme'
+import { chartStyles } from './chartTheme'
+import { useTheme } from '@/context/ThemeContext'
 
 /** Monthly mean BAI: historical 10th–90th band, median, and one highlighted year. */
 export function SeasonalPatternChart({
@@ -28,6 +29,8 @@ export function SeasonalPatternChart({
   year: number
   height?: number
 }) {
+  const { tokens } = useTheme()
+  const cs = chartStyles(tokens)
   const data = useMemo(() => {
     const sums = new Array(12).fill(0) as number[]
     const ns = new Array(12).fill(0) as number[]
@@ -48,23 +51,23 @@ export function SeasonalPatternChart({
     <div style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
-          <CartesianGrid stroke={GRID_STROKE} vertical={false} />
-          <XAxis dataKey="month" tick={AXIS_TICK} axisLine={{ stroke: AXIS_STROKE }} tickLine={false} />
-          <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} width={44} />
+          <CartesianGrid stroke={cs.grid} vertical={false} />
+          <XAxis dataKey="month" tick={cs.tick} axisLine={{ stroke: cs.axis }} tickLine={false} />
+          <YAxis tick={cs.tick} axisLine={false} tickLine={false} width={44} />
           <Tooltip
-            {...TOOLTIP_STYLE}
+            {...cs.tooltip}
             formatter={(v, name) => {
               if (Array.isArray(v)) return [`${Number(v[0]).toFixed(1)} – ${Number(v[1]).toFixed(1)}`, 'Normal range (10–90th)']
               return [v === null ? '—' : Number(v).toFixed(1), name === 'median' ? 'Historical median' : `${year}`]
             }}
           />
-          <Area dataKey="band" stroke="none" fill="#3987e5" fillOpacity={0.16} isAnimationActive={false} name="band" />
-          <Line dataKey="median" stroke="#7d8696" strokeWidth={2} strokeDasharray="4 3" dot={false} isAnimationActive={false} name="median" />
+          <Area dataKey="band" stroke="none" fill={tokens.chart.band} fillOpacity={1} isAnimationActive={false} name="band" />
+          <Line dataKey="median" stroke={tokens.chart.median} strokeWidth={2} strokeDasharray="4 3" dot={false} isAnimationActive={false} name="median" />
           <Line
             dataKey="selected"
-            stroke="#ff8a1f"
+            stroke={tokens.accent}
             strokeWidth={2.5}
-            dot={{ r: 3, fill: '#ff8a1f', strokeWidth: 0 }}
+            dot={{ r: 3, fill: tokens.accent, strokeWidth: 0 }}
             isAnimationActive={false}
             connectNulls={false}
             name="selected"
@@ -82,10 +85,10 @@ export function SeasonalLegend({ year }: { year: number }) {
         <span className="h-0.5 w-4 rounded bg-ember-500" /> {year}
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="h-0 w-4 border-t-2 border-dashed border-[#7d8696]" /> Historical median
+        <span className="h-0 w-4 border-t-2 border-dashed border-[var(--chart-median)]" /> Historical median
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="h-2.5 w-4 rounded-sm bg-[#3987e5]/25" /> Normal range (10th–90th)
+        <span className="h-2.5 w-4 rounded-sm" style={{ background: 'var(--chart-band)' }} /> Normal range (10th–90th)
       </span>
     </div>
   )
@@ -103,6 +106,8 @@ export function AnnualActivityChart({
   onSelectYear?: (year: number) => void
   height?: number
 }) {
+  const { tokens } = useTheme()
+  const cs = chartStyles(tokens)
   const data = useMemo(() => {
     const byYear = new Map<number, { total: number; low: number; high: number; scaledDays: number; days: number }>()
     for (const d of analysis.days) {
@@ -130,18 +135,18 @@ export function AnnualActivityChart({
     <div style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: -8 }} barCategoryGap="18%">
-          <CartesianGrid stroke={GRID_STROKE} vertical={false} />
+          <CartesianGrid stroke={cs.grid} vertical={false} />
           <XAxis
             dataKey="year"
-            tick={AXIS_TICK}
-            axisLine={{ stroke: AXIS_STROKE }}
+            tick={cs.tick}
+            axisLine={{ stroke: cs.axis }}
             tickLine={false}
             interval="preserveStartEnd"
             minTickGap={16}
           />
-          <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} tickFormatter={fmtCompact} width={48} />
+          <YAxis tick={cs.tick} axisLine={false} tickLine={false} tickFormatter={fmtCompact} width={48} />
           <Tooltip
-            {...TOOLTIP_STYLE}
+            {...cs.tooltip}
             cursor={{ fill: 'rgba(255,255,255,0.04)' }}
             formatter={(v, _n, item) => {
               const p = item.payload as (typeof data)[number]
@@ -161,11 +166,11 @@ export function AnnualActivityChart({
             {data.map((d) => (
               <Cell
                 key={d.year}
-                fill={d.scaled ? SENSOR_COLORS.MODIS : SENSOR_COLORS.harmonized}
+                fill={d.scaled ? tokens.sensors.MODIS : tokens.sensors.harmonized}
                 fillOpacity={highlightYear === undefined || highlightYear === d.year ? 0.9 : 0.4}
               />
             ))}
-            <ErrorBar dataKey="err" direction="y" stroke="#a1a9b6" strokeWidth={1} width={4} />
+            <ErrorBar dataKey="err" direction="y" stroke={tokens.textMuted} strokeWidth={1} width={4} />
           </Bar>
         </BarChart>
       </ResponsiveContainer>

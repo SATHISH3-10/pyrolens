@@ -31,7 +31,7 @@ export function SeasonTimeline({ analysis }: { analysis: ActivityAnalysis }) {
     if (r > 0.45) return ACTIVITY_COLORS.high
     if (r > 0.2) return ACTIVITY_COLORS.moderate
     if (r > 0.05) return ACTIVITY_COLORS.low
-    return '#262c36'
+    return 'var(--color-ink-600)'
   }
 
   return (

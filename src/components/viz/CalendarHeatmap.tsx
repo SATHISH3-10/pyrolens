@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ActivityAnalysis, ActivityClass, DataSource, ObservationQuality } from '@/types/activity'
 import { aggregatePeriods, CLASS_LABEL } from '@/utils/burningActivity'
 import { cn } from '@/lib'
-import { ACTIVITY_COLORS, LIMITED_COLOR, NO_COVERAGE_COLOR, SOURCE_LABEL, SOURCE_SHORT } from './activityScale'
+import { ACTIVITY_COLORS, SOURCE_LABEL, SOURCE_SHORT } from './activityScale'
+import { useTheme } from '@/context/ThemeContext'
 
 export type CalendarResolution = 'day' | 'week' | 'month'
 export type CalendarEmphasis = 'none' | 'anomalies' | 'critical'
@@ -65,6 +66,7 @@ export function CalendarHeatmap({
   className,
   canvasId,
 }: CalendarHeatmapProps) {
+  const { tokens } = useTheme()
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [width, setWidth] = useState(0)
@@ -199,7 +201,7 @@ export function CalendarHeatmap({
     ctx.textBaseline = 'middle'
 
     // Column labels.
-    ctx.fillStyle = '#6c7584'
+    ctx.fillStyle = tokens.textFaint
     if (resolution === 'month') {
       ctx.textAlign = 'center'
       MONTHS.forEach((m, i) => ctx.fillText(m, GUTTER_LEFT + (i + 0.5) * cellW, GUTTER_TOP / 2))
@@ -210,9 +212,9 @@ export function CalendarHeatmap({
         const x = GUTTER_LEFT + col * cellW
         ctx.fillText(m, x + 2, GUTTER_TOP / 2)
         if (i > 0) {
-          ctx.fillStyle = '#20252e'
+          ctx.fillStyle = tokens.border
           ctx.fillRect(x - 0.5, GUTTER_TOP - 4, 1, 4)
-          ctx.fillStyle = '#6c7584'
+          ctx.fillStyle = tokens.textFaint
         }
       })
     }
@@ -220,13 +222,13 @@ export function CalendarHeatmap({
     years.forEach((year, r) => {
       const y = GUTTER_TOP + r * (rowHeight + rowGap)
       ctx.textAlign = 'left'
-      ctx.fillStyle = '#a1a9b6'
+      ctx.fillStyle = tokens.textMuted
       ctx.font = '500 11px "JetBrains Mono", ui-monospace, monospace'
       ctx.fillText(String(year), 2, y + rowHeight / 2)
       const src = yearSources.get(year)
       if (src) {
         ctx.font = '600 9px Inter, system-ui, sans-serif'
-        ctx.fillStyle = src === 'modis_scaled' ? '#e8703a' : src === 'combined' ? '#22b07d' : '#3987e5'
+        ctx.fillStyle = src === 'modis_scaled' ? tokens.sensors.MODIS : src === 'combined' ? tokens.sensors.harmonized : tokens.sensors.VIIRS
         ctx.fillText(SOURCE_SHORT[src], 36, y + rowHeight / 2)
       }
 
@@ -235,7 +237,7 @@ export function CalendarHeatmap({
         const x = GUTTER_LEFT + c * cellW
         const w = Math.max(0.5, cellW - gap)
         if (!cell) {
-          ctx.fillStyle = NO_COVERAGE_COLOR
+          ctx.fillStyle = tokens.page
           ctx.fillRect(x, y, w, rowHeight)
           continue
         }
@@ -244,16 +246,16 @@ export function CalendarHeatmap({
         if (emphasis === 'critical' && !cell.critical) alpha *= 0.22
         ctx.globalAlpha = alpha
         if (cell.quality === 'no_coverage') {
-          ctx.fillStyle = NO_COVERAGE_COLOR
+          ctx.fillStyle = tokens.page
           ctx.fillRect(x, y, w, rowHeight)
         } else if (cell.quality === 'limited' && cell.cls === 'none') {
-          ctx.fillStyle = ACTIVITY_COLORS.none
+          ctx.fillStyle = tokens.zero
           ctx.fillRect(x, y, w, rowHeight)
           ctx.save()
           ctx.beginPath()
           ctx.rect(x, y, w, rowHeight)
           ctx.clip()
-          ctx.strokeStyle = LIMITED_COLOR
+          ctx.strokeStyle = tokens.unknown
           ctx.lineWidth = 1
           for (let k = -rowHeight; k < w + rowHeight; k += 4) {
             ctx.beginPath()
@@ -263,10 +265,10 @@ export function CalendarHeatmap({
           }
           ctx.restore()
         } else {
-          ctx.fillStyle = ACTIVITY_COLORS[cell.cls]
+          ctx.fillStyle = tokens.bai[cell.cls]
           ctx.fillRect(x, y, w, rowHeight)
           if (cell.quality === 'limited') {
-            ctx.fillStyle = 'rgba(8,9,12,0.45)'
+            ctx.fillStyle = tokens.page
             ctx.fillRect(x, y + rowHeight - 3, w, 3)
           }
         }
@@ -289,14 +291,14 @@ export function CalendarHeatmap({
         if (col >= 0) {
           const x = GUTTER_LEFT + col * cellW
           const y = GUTTER_TOP + r * (rowHeight + rowGap)
-          ctx.strokeStyle = '#ffffff'
+          ctx.strokeStyle = tokens.accentRing
           ctx.lineWidth = 2
           const w = Math.max(3, cellW - gap)
           ctx.strokeRect(x - 1.5, y - 1.5, w + 3, rowHeight + 3)
         }
       }
     }
-  }, [cells, years, yearSources, width, height, cellW, columns, gap, rowGap, rowHeight, resolution, selectedDate, emphasis])
+  }, [cells, years, yearSources, width, height, cellW, columns, gap, rowGap, rowHeight, resolution, selectedDate, emphasis, tokens])
 
   const hitTest = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current

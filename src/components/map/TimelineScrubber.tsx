@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Pause, Play } from 'lucide-react'
 import type { ActivityAnalysis } from '@/types/activity'
 import { CLASS_LABEL } from '@/utils/burningActivity'
-import { ACTIVITY_COLORS, LIMITED_COLOR } from '@/components/viz/activityScale'
+import { useTheme } from '@/context/ThemeContext'
 import { cn, fmtDate } from '@/lib'
 
 const MONTHS = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
@@ -30,6 +30,7 @@ export function TimelineScrubber({
   className,
 }: TimelineScrubberProps) {
   const year = Number(date.slice(0, 4))
+  const { tokens } = useTheme()
   const svgRef = useRef<SVGSVGElement>(null)
   const [hover, setHover] = useState<number | null>(null)
   const firstYear = Number(analysis.firstDate.slice(0, 4))
@@ -72,7 +73,7 @@ export function TimelineScrubber({
         type="button"
         onClick={onTogglePlay}
         aria-label={playing ? 'Pause animation' : 'Play through time'}
-        className="flex size-9 shrink-0 items-center justify-center rounded-full bg-ember-500 text-ink-950 transition-colors hover:bg-ember-400"
+        className="flex size-9 shrink-0 items-center justify-center rounded-full bg-ember-500 text-on-accent transition-colors hover:bg-ember-600"
       >
         {playing ? <Pause className="size-4" /> : <Play className="ml-0.5 size-4" />}
       </button>
@@ -109,7 +110,7 @@ export function TimelineScrubber({
           }}
         >
           {winStartIdx >= 0 && winEndIdx >= winStartIdx && (
-            <rect x={winStartIdx * bw} y={0} width={(winEndIdx - winStartIdx + 1) * bw} height={H} fill="#ffffff" opacity={0.08} />
+            <rect x={winStartIdx * bw} y={0} width={(winEndIdx - winStartIdx + 1) * bw} height={H} fill={tokens.text} opacity={0.08} />
           )}
           {days.map((d) => {
             const h = d.cls === 'none' ? (d.quality === 'limited' ? 4 : 2) : 4 + (d.bai / 100) * (H - 6)
@@ -120,15 +121,15 @@ export function TimelineScrubber({
                 y={H - h}
                 width={Math.max(bw - 0.6, 0.8)}
                 height={h}
-                fill={d.cls === 'none' ? (d.quality === 'limited' ? LIMITED_COLOR : '#262c36') : ACTIVITY_COLORS[d.cls]}
+                fill={d.cls === 'none' ? (d.quality === 'limited' ? tokens.unknown : tokens.zero) : tokens.bai[d.cls]}
               />
             )
           })}
           {selectedIdx !== undefined && (
-            <rect x={(selectedIdx - 1) * bw - 1} y={0} width={Math.max(bw, 2.5)} height={H} fill="#ffffff" />
+            <rect x={(selectedIdx - 1) * bw - 1} y={0} width={Math.max(bw, 2.5)} height={H} fill={tokens.accentRing} />
           )}
           {MONTHS.map((m, i) => (
-            <text key={i} x={(i / 12) * W + 4} y={H + 10} fontSize="9" fill="#6c7584">
+            <text key={i} x={(i / 12) * W + 4} y={H + 10} fontSize="9" fill={tokens.textFaint}>
               {m}
             </text>
           ))}
@@ -138,7 +139,7 @@ export function TimelineScrubber({
             className="pointer-events-none absolute -top-9 z-10 whitespace-nowrap rounded-md border border-line-strong bg-ink-850 px-2 py-1 text-[11px] text-fg shadow-lg"
             style={{ left: `${((hover ?? 0) / SLOTS) * 100}%`, transform: 'translateX(-50%)' }}
           >
-            {fmtDate(hoverDay.date)} · <span style={{ color: hoverDay.cls === 'none' ? undefined : ACTIVITY_COLORS[hoverDay.cls] }}>{CLASS_LABEL[hoverDay.cls]}</span> · BAI{' '}
+            {fmtDate(hoverDay.date)} · <span className="font-semibold">{CLASS_LABEL[hoverDay.cls]}</span> · BAI{' '}
             {hoverDay.bai.toFixed(0)}
           </div>
         )}

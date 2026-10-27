@@ -17,8 +17,9 @@ import {
 import type { ActivityAnalysis } from '@/types/activity'
 import { CLASS_LABEL } from '@/utils/burningActivity'
 import { fmtDate, fmtDayMonth } from '@/lib'
-import { ACTIVITY_COLORS, LIMITED_COLOR } from './activityScale'
-import { AXIS_STROKE, AXIS_TICK, GRID_STROKE, TOOLTIP_STYLE } from './chartTheme'
+import { ACTIVITY_COLORS } from './activityScale'
+import { useTheme } from '@/context/ThemeContext'
+import { chartStyles } from './chartTheme'
 
 interface DailyTimeSeriesProps {
   analysis: ActivityAnalysis
@@ -30,6 +31,8 @@ interface DailyTimeSeriesProps {
 }
 
 export function DailyTimeSeries({ analysis, start, end, selectedDate, onSelect, height = 280 }: DailyTimeSeriesProps) {
+  const { tokens } = useTheme()
+  const cs = chartStyles(tokens)
   const data = useMemo(
     () =>
       analysis.days
@@ -61,13 +64,13 @@ export function DailyTimeSeries({ analysis, start, end, selectedDate, onSelect, 
             if (label && onSelect) onSelect(String(label))
           }}
         >
-          <CartesianGrid stroke={GRID_STROKE} vertical={false} />
+          <CartesianGrid stroke={cs.grid} vertical={false} />
           {periods.map((p) => (
             <ReferenceArea
               key={p.id}
               x1={p.start < start ? start : p.start}
               x2={p.end > end ? end : p.end}
-              fill="#f0862c"
+              fill={tokens.bai.high}
               fillOpacity={0.08}
               stroke="none"
               ifOverflow="hidden"
@@ -75,15 +78,15 @@ export function DailyTimeSeries({ analysis, start, end, selectedDate, onSelect, 
           ))}
           <XAxis
             dataKey="date"
-            tick={AXIS_TICK}
+            tick={cs.tick}
             tickFormatter={fmtDayMonth}
-            axisLine={{ stroke: AXIS_STROKE }}
+            axisLine={{ stroke: cs.axis }}
             tickLine={false}
             minTickGap={36}
           />
-          <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} width={44} />
+          <YAxis tick={cs.tick} axisLine={false} tickLine={false} domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} width={44} />
           <Tooltip
-            {...TOOLTIP_STYLE}
+            {...cs.tooltip}
             cursor={{ fill: 'rgba(255,255,255,0.05)' }}
             labelFormatter={(d) => fmtDate(String(d))}
             formatter={(v, name, item) => {
@@ -93,18 +96,18 @@ export function DailyTimeSeries({ analysis, start, end, selectedDate, onSelect, 
               return [`${Number(v).toFixed(0)} · ${p.limited && p.cls === 'none' ? 'Limited observation' : CLASS_LABEL[p.cls]}`, 'BAI']
             }}
           />
-          <Area dataKey="band" stroke="none" fill="#3987e5" fillOpacity={0.14} isAnimationActive={false} name="band" />
+          <Area dataKey="band" stroke="none" fill={tokens.chart.band} fillOpacity={1} isAnimationActive={false} name="band" />
           <Bar dataKey="bai" isAnimationActive={false} name="bai" className={onSelect ? 'cursor-pointer' : undefined}>
             {data.map((d) => (
-              <Cell key={d.date} fill={d.limited && d.cls === 'none' ? LIMITED_COLOR : ACTIVITY_COLORS[d.cls]} />
+              <Cell key={d.date} fill={d.limited && d.cls === 'none' ? tokens.unknown : tokens.bai[d.cls]} />
             ))}
           </Bar>
-          <Line dataKey="p97" stroke="#e0412f" strokeDasharray="3 3" strokeWidth={1} dot={false} isAnimationActive={false} name="p97" />
+          <Line dataKey="p97" stroke={tokens.chart.threshold} strokeDasharray="3 3" strokeWidth={1} dot={false} isAnimationActive={false} name="p97" />
           {selectedDate && selectedDate >= start && selectedDate <= end && (
-            <ReferenceLine x={selectedDate} stroke="#ffffff" strokeWidth={1.5} />
+            <ReferenceLine x={selectedDate} stroke={tokens.accentRing} strokeWidth={1.5} />
           )}
           {data.length > 120 && (
-            <Brush dataKey="date" height={22} stroke="#2d3440" fill="#0d0f13" travellerWidth={8} tickFormatter={fmtDayMonth} />
+            <Brush dataKey="date" height={22} stroke={tokens.borderStrong} fill={tokens.raised} travellerWidth={8} tickFormatter={fmtDayMonth} />
           )}
         </ComposedChart>
       </ResponsiveContainer>
@@ -119,13 +122,13 @@ export function DailyTimeSeriesLegend() {
         <span className="h-2.5 w-3 rounded-sm" style={{ background: ACTIVITY_COLORS.high }} /> Daily BAI (coloured by class)
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="h-2.5 w-3 rounded-sm bg-[#3987e5]/25" /> Normal range
+        <span className="h-2.5 w-3 rounded-sm" style={{ background: 'var(--chart-band)' }} /> Normal range
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="w-3 border-t border-dashed border-[#e0412f]" /> 97th pct (anomaly threshold)
+        <span className="w-3 border-t border-dashed border-[var(--chart-threshold)]" /> 97th pct (anomaly threshold)
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="h-2.5 w-3 rounded-sm bg-[#f0862c]/15" /> Critical period
+        <span className="h-2.5 w-3 rounded-sm" style={{ background: 'color-mix(in srgb, var(--bai-high) 18%, transparent)' }} /> Critical period
       </span>
     </div>
   )

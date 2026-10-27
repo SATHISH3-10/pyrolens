@@ -3,7 +3,7 @@ import L from 'leaflet'
 import { Polygon, Polyline, Rectangle, CircleMarker, useMap, useMapEvents } from 'react-leaflet'
 import type { FireObservation } from '@/types/fire'
 import type { FireEvent } from '@/types/activity'
-import { SENSOR_COLORS } from '@/components/viz/activityScale'
+import { useTheme } from '@/context/ThemeContext'
 
 /** Hotspots drawn imperatively on a shared canvas renderer, so tens of thousands of points stay fluid. */
 export function HotspotLayer({
@@ -16,6 +16,7 @@ export function HotspotLayer({
   onSelect: (o: FireObservation) => void
 }) {
   const map = useMap()
+  const { tokens } = useTheme()
   const renderer = useMemo(() => L.canvas({ padding: 0.4, tolerance: 4 }), [])
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
@@ -36,7 +37,7 @@ export function HotspotLayer({
         color: modis ? '#ffb38a' : '#9cc4f5',
         weight: 0.6,
         opacity: 0.9,
-        fillColor: modis ? SENSOR_COLORS.MODIS : SENSOR_COLORS.VIIRS,
+        fillColor: modis ? tokens.sensors.MODIS : tokens.sensors.VIIRS,
         fillOpacity: 0.85,
       })
       m.on('click', () => onSelectRef.current(o))
@@ -49,7 +50,7 @@ export function HotspotLayer({
           radius: 9,
           color: '#ffffff',
           weight: 2.5,
-          fillColor: selected.instrument === 'MODIS' ? SENSOR_COLORS.MODIS : SENSOR_COLORS.VIIRS,
+          fillColor: selected.instrument === 'MODIS' ? tokens.sensors.MODIS : tokens.sensors.VIIRS,
           fillOpacity: 1,
         }),
       )
@@ -58,7 +59,7 @@ export function HotspotLayer({
     return () => {
       group.remove()
     }
-  }, [map, points, selectedId, renderer])
+  }, [map, points, selectedId, renderer, tokens])
 
   return null
 }

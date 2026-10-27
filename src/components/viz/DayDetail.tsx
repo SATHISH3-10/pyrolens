@@ -8,7 +8,8 @@ import { addDays, CLASS_LABEL, explainDay, isLowConfidence } from '@/utils/burni
 import { Button, Card } from '@/components/ui'
 import { cn, fmtDate, fmtNum } from '@/lib'
 import { BASEMAPS } from '@/components/map/basemaps'
-import { ACTIVITY_COLORS, SENSOR_COLORS, SOURCE_LABEL } from './activityScale'
+import { ACTIVITY_COLORS, inkOn, SENSOR_COLORS, SOURCE_LABEL } from './activityScale'
+import { useTheme } from '@/context/ThemeContext'
 
 interface DayDetailProps {
   analysis: ActivityAnalysis
@@ -26,6 +27,7 @@ function confidenceBucket(o: FireObservation): 'low' | 'nominal' | 'high' {
 
 export function DayDetail({ analysis, date, observations, onChangeDate, className }: DayDetailProps) {
   const navigate = useNavigate()
+  const { resolved, tokens } = useTheme()
   const idx = analysis.dayIndex.get(date)
   const day = idx !== undefined ? analysis.days[idx] : undefined
 
@@ -86,7 +88,7 @@ export function DayDetail({ analysis, date, observations, onChangeDate, classNam
           {limitedEmpty ? (
             <CloudOff className="size-5 text-fg" aria-hidden="true" />
           ) : (
-            <span className={cn('text-lg font-bold tabular', day.cls === 'moderate' || day.cls === 'high' ? 'text-ink-950' : 'text-white')}>
+            <span className="text-lg font-bold tabular" style={{ color: inkOn(day.cls, resolved) }}>
               {day.bai.toFixed(0)}
             </span>
           )}
@@ -141,8 +143,8 @@ export function DayDetail({ analysis, date, observations, onChangeDate, classNam
           <div className="mb-1.5 flex justify-between text-[11px] text-fg-faint">
             <span>Sensor contribution</span>
             <span>
-              <span style={{ color: SENSOR_COLORS.MODIS }}>MODIS {day.modisCount}</span> ·{' '}
-              <span style={{ color: SENSOR_COLORS.VIIRS }}>VIIRS {day.viirsCount}</span>
+              <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="size-2 rounded-full" style={{ background: SENSOR_COLORS.MODIS }} />MODIS {day.modisCount}</span> ·{' '}
+              <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="size-2 rounded-full" style={{ background: SENSOR_COLORS.VIIRS }} />VIIRS {day.viirsCount}</span>
             </span>
           </div>
           <div className="flex h-2 gap-0.5 overflow-hidden rounded-full">
@@ -158,9 +160,9 @@ export function DayDetail({ analysis, date, observations, onChangeDate, classNam
                 </span>
               </div>
               <div className="flex h-2 gap-0.5 overflow-hidden rounded-full">
-                <div style={{ flex: detail.conf.high, background: '#a1a9b6' }} />
-                <div style={{ flex: detail.conf.nominal, background: '#5b6472' }} />
-                <div style={{ flex: detail.conf.low, background: '#323944' }} />
+                <div style={{ flex: detail.conf.high, background: 'var(--color-fg-muted)' }} />
+                <div style={{ flex: detail.conf.nominal, background: 'var(--color-ink-500)' }} />
+                <div style={{ flex: detail.conf.low, background: 'var(--color-ink-600)' }} />
               </div>
             </>
           )}
@@ -191,15 +193,15 @@ export function DayDetail({ analysis, date, observations, onChangeDate, classNam
             scrollWheelZoom={false}
             style={{ height: '100%', width: '100%' }}
           >
-            <TileLayer url={BASEMAPS.dark.url} />
-            <TileLayer url={BASEMAPS.dark.labels!} />
+            <TileLayer url={BASEMAPS[resolved === 'light' ? 'light' : 'dark'].url} />
+            <TileLayer url={BASEMAPS[resolved === 'light' ? 'light' : 'dark'].labels!} />
             {dayObs.slice(0, 1500).map((o) => (
               <CircleMarker
                 key={o.id}
                 center={[o.latitude, o.longitude]}
                 radius={o.instrument === 'MODIS' ? 4 : 3}
                 pathOptions={{
-                  color: o.instrument === 'MODIS' ? SENSOR_COLORS.MODIS : SENSOR_COLORS.VIIRS,
+                  color: o.instrument === 'MODIS' ? tokens.sensors.MODIS : tokens.sensors.VIIRS,
                   weight: 1,
                   fillOpacity: 0.8,
                 }}

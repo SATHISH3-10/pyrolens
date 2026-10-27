@@ -1,10 +1,19 @@
 @import "tailwindcss";
 
+/* Theme variants driven by the [data-theme] attribute on <html> (set before first paint in index.html). */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+@custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
+
+/*
+ * Design tokens. The @theme block holds the DARK values (default); [data-theme="light"] below redefines the
+ * same variables, so every Tailwind utility (bg-ink-850, text-fg, border-line, …) themes automatically.
+ * All text/surface pairs were checked for WCAG AA (≥4.5:1) in both themes.
+ */
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* Surfaces */
+  /* Surfaces: 950 page → 850 card → 800 raised/input → 700 hover/chip → 600 active */
   --color-ink-950: #08090c;
   --color-ink-900: #0d0f13;
   --color-ink-850: #111419;
@@ -20,15 +29,17 @@
   /* Text */
   --color-fg: #eceef2;
   --color-fg-muted: #a1a9b6;
-  --color-fg-faint: #6c7584;
+  --color-fg-faint: #8a93a3;
 
-  /* Primary: ember */
+  /* Primary: ember (accent) */
   --color-ember-200: #ffd8a8;
   --color-ember-300: #ffc078;
   --color-ember-400: #ffa94d;
   --color-ember-500: #ff8a1f;
   --color-ember-600: #e16d05;
   --color-ember-950: #2a1606;
+  /* Text placed on an ember-500 fill (≥8:1 in both themes). */
+  --color-on-accent: #111111;
 
   /* Secondary: signal */
   --color-signal-200: #bae6fd;
@@ -41,25 +52,133 @@
   --color-warn: #fab219;
   --color-danger: #f87171;
 
-  /* Sensors (categorical, fixed) */
-  --color-viirs: #3987e5;
-  --color-modis: #e8703a;
-  --color-harmonized: #22b07d;
-
-  /* Burning Activity classes (semantic heat scale) */
-  --color-act-none: #1a1f27;
-  --color-act-low: #2f8f72;
-  --color-act-moderate: #e3b53b;
-  --color-act-high: #f0862c;
-  --color-act-veryhigh: #e0412f;
-  --color-act-extreme: #a3123a;
-  --color-act-limited: #4a515d;
-
   --shadow-glow-ember: 0 0 0 1px rgb(255 138 31 / 0.3), 0 8px 30px -10px rgb(255 138 31 / 0.35);
   --shadow-panel: 0 1px 0 0 rgb(255 255 255 / 0.035) inset, 0 1px 2px rgb(0 0 0 / 0.35);
   --shadow-float: 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.06);
 
   --animate-fade-in: fade-in 0.25s ease-out;
+}
+
+/* Non-utility tokens (charts, canvas, map, BAI scale). Read from JS via getComputedStyle (see ThemeContext). */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Burning Activity Index classes: inferno-style ramp that gets BRIGHTER with intensity on dark surfaces.
+     Validated (ordinal): lightness monotone, adjacent ΔL ≥ 0.06, Low ≥ 2:1 vs card, hue spread 37°. */
+  --bai-low: #6e3a86;
+  --bai-moderate: #a8336a;
+  --bai-high: #e0553a;
+  --bai-very-high: #f7962b;
+  --bai-extreme: #fde68a;
+  --bai-zero: #222833; /* zero detections, coverage known */
+  --bai-nocov: #3a414d; /* hatch stroke for "no satellite coverage" */
+  --bai-unknown: #4a5361; /* dashed border for "coverage unknown" */
+  --bai-limited: #e5e7eb; /* corner triangle: limited observation */
+  --bai-scaled-dot: #e5e7eb; /* centre dot: MODIS scaled to VIIRS */
+  --bai-anomaly-ring: #f472b6;
+  --bai-ink-on-dark: #ffffff;
+  --bai-ink-on-light: #111111;
+
+  --sensor-modis: #e8703a;
+  --sensor-viirs: #3987e5;
+  --sensor-harmonized: #22b07d;
+
+  --chart-grid: #20252e;
+  --chart-axis: #2d3440;
+  --chart-tick: #8a93a3;
+  --chart-band: rgb(57 135 229 / 0.2);
+  --chart-median: #8a93a3;
+  --chart-threshold: #e0553a;
+  --chart-tooltip-bg: rgb(17 20 25 / 0.96);
+  --chart-tooltip-border: #2d3440;
+
+  --panel-bg: rgb(13 15 19 / 0.82);
+  --panel-border: rgb(255 255 255 / 0.08);
+  --accent-ring: #ffffff;
+  --focus-ring: #38bdf8;
+  --aoi-stroke: #22d3ee;
+  --map-bg: #0b0d10;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-ink-950: #f4f5f7;
+  --color-ink-900: #fbfbfc;
+  --color-ink-850: #ffffff;
+  --color-ink-800: #f3f4f6;
+  --color-ink-700: #e9ebef;
+  --color-ink-600: #dde1e6;
+  --color-ink-500: #c5cad3;
+  --color-line: #e2e5ea;
+  --color-line-strong: #cdd2da;
+  --color-fg: #111827;
+  --color-fg-muted: #4b5563;
+  --color-fg-faint: #5f6b7a;
+
+  /* Accent text shades darkened for contrast on white; ember-500 fill is unchanged. */
+  --color-ember-200: #7c2d12;
+  --color-ember-300: #9a3412;
+  --color-ember-400: #a8390a;
+  --color-ember-950: #fff1e6;
+  --color-signal-200: #0c4a6e;
+  --color-signal-300: #075985;
+  --color-signal-400: #0369a1;
+  --color-signal-950: #e0f2fe;
+
+  /* Tailwind palette shades that the UI uses as light-on-dark text get readable dark equivalents. */
+  --color-red-200: #991b1b;
+  --color-red-300: #b91c1c;
+  --color-red-400: #b91c1c;
+  --color-orange-300: #c2410c;
+  --color-orange-400: #c2410c;
+  --color-amber-200: #92400e;
+  --color-amber-300: #a16207;
+  --color-amber-400: #b45309;
+  --color-emerald-200: #065f46;
+  --color-emerald-300: #047857;
+  --color-emerald-400: #047857;
+  --color-sky-300: #0369a1;
+  --color-violet-300: #6d28d9;
+
+  --shadow-panel: 0 1px 2px rgb(16 24 40 / 0.06);
+  --shadow-float: 0 12px 32px -10px rgb(16 24 40 / 0.25), 0 0 0 1px rgb(16 24 40 / 0.08);
+  --shadow-glow-ember: 0 0 0 1px rgb(234 88 12 / 0.35), 0 8px 30px -12px rgb(234 88 12 / 0.3);
+
+  /* BAI classes: amber → dark red, gets DARKER with intensity on light surfaces.
+     Validated (ordinal): lightness monotone, adjacent ΔL ≥ 0.06, Low ≥ 2:1 vs white. */
+  --bai-low: #e3a93a;
+  --bai-moderate: #dd7a0e;
+  --bai-high: #c2410c;
+  --bai-very-high: #9b1c1c;
+  --bai-extreme: #5c1212;
+  --bai-zero: #eceef2;
+  --bai-nocov: #b8bfca;
+  --bai-unknown: #aab2be;
+  --bai-limited: #111827;
+  --bai-scaled-dot: #111827;
+  --bai-anomaly-ring: #7c3aed;
+
+  --sensor-modis: #d9561f;
+  --sensor-viirs: #2a78d6;
+  --sensor-harmonized: #0f8a5f;
+
+  --chart-grid: #e7e9ee;
+  --chart-axis: #cdd2da;
+  --chart-tick: #5f6b7a;
+  --chart-band: rgb(42 120 214 / 0.16);
+  --chart-median: #5f6b7a;
+  --chart-threshold: #b91c1c;
+  --chart-tooltip-bg: rgb(255 255 255 / 0.98);
+  --chart-tooltip-border: #cdd2da;
+
+  --panel-bg: rgb(255 255 255 / 0.86);
+  --panel-border: rgb(16 24 40 / 0.1);
+  --accent-ring: #111827;
+  --focus-ring: #0369a1;
+  --aoi-stroke: #1e3a8a;
+  --map-bg: #e9ecf0;
 }
 
 @keyframes fade-in {
@@ -73,9 +192,18 @@
   }
 }
 
+@keyframes pulse-ring {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 @layer base {
   html {
-    color-scheme: dark;
     -webkit-text-size-adjust: 100%;
   }
   html,
@@ -92,7 +220,7 @@
     text-rendering: optimizeLegibility;
   }
   :focus-visible {
-    outline: 2px solid var(--color-signal-400);
+    outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
     border-radius: 4px;
   }
@@ -103,8 +231,11 @@
     scrollbar-width: thin;
     scrollbar-color: var(--color-ink-600) transparent;
   }
-  input[type="date"]::-webkit-calendar-picker-indicator {
+  :root[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator,
+  :root:not([data-theme]) input[type="date"]::-webkit-calendar-picker-indicator {
     filter: invert(0.7);
+  }
+  input[type="date"]::-webkit-calendar-picker-indicator {
     cursor: pointer;
   }
   input[type="range"] {
@@ -121,12 +252,11 @@
   .tabular {
     font-variant-numeric: tabular-nums;
   }
+  .hatch-nocov {
+    background-image: repeating-linear-gradient(135deg, var(--bai-nocov) 0 1.5px, transparent 1.5px 5px);
+  }
   .hatch-limited {
-    background-image: repeating-linear-gradient(
-      135deg,
-      var(--color-act-limited) 0 2px,
-      transparent 2px 5px
-    );
+    background-image: repeating-linear-gradient(135deg, var(--bai-unknown) 0 2px, transparent 2px 5px);
   }
   .field {
     border-radius: 0.5rem;
@@ -142,23 +272,27 @@
   }
   .field:focus {
     outline: none;
-    border-color: var(--color-signal-400);
+    border-color: var(--focus-ring);
   }
   .panel-float {
-    background: rgb(13 15 19 / 0.88);
-    backdrop-filter: blur(12px);
+    background: var(--panel-bg);
+    backdrop-filter: blur(12px) saturate(1.2);
+    -webkit-backdrop-filter: blur(12px) saturate(1.2);
+    border: 1px solid var(--panel-border);
     border-radius: 0.875rem;
     box-shadow: var(--shadow-float);
   }
+  .pulse-ring {
+    animation: pulse-ring 1s ease-in-out infinite;
+  }
 }
 
-/* ─── Leaflet ─────────────────────────────────────────────────────────────── */
+/* ─── Leaflet (day-detail mini map only) ──────────────────────────────────── */
 
 .leaflet-container {
   font-family: inherit;
-  background-color: #0b0d10 !important;
+  background-color: var(--map-bg) !important;
 }
-
 .leaflet-bar {
   border: none !important;
   box-shadow: var(--shadow-float) !important;
@@ -166,54 +300,26 @@
   overflow: hidden;
 }
 .leaflet-bar a {
-  background-color: rgb(13 15 19 / 0.9) !important;
+  background-color: var(--panel-bg) !important;
   color: var(--color-fg) !important;
   border-bottom-color: var(--color-line) !important;
-  width: 32px !important;
-  height: 32px !important;
-  line-height: 32px !important;
-}
-.leaflet-bar a:hover {
-  background-color: var(--color-ink-700) !important;
-}
-
-.leaflet-popup-content-wrapper {
-  background-color: rgb(13 15 19 / 0.96) !important;
-  color: var(--color-fg) !important;
-  border-radius: 0.75rem !important;
-  box-shadow: var(--shadow-float) !important;
-}
-.leaflet-popup-tip {
-  background-color: rgb(13 15 19 / 0.96) !important;
-}
-.leaflet-popup-content {
-  margin: 12px 14px !important;
-  line-height: 1.45 !important;
-  font-size: 12px;
-}
-.leaflet-popup-close-button {
-  color: var(--color-fg-muted) !important;
-}
-.leaflet-container a {
-  color: var(--color-signal-400);
 }
 .leaflet-control-attribution {
-  background: rgb(8 9 12 / 0.7) !important;
-  color: var(--color-fg-faint) !important;
+  background: var(--panel-bg) !important;
+  color: var(--color-fg-muted) !important;
   font-size: 10px !important;
-  border-top-left-radius: 6px;
 }
 .leaflet-control-attribution a {
-  color: var(--color-fg-muted) !important;
+  color: var(--color-fg) !important;
 }
 .leaflet-crosshair,
 .leaflet-crosshair .leaflet-interactive {
   cursor: crosshair !important;
 }
 .leaflet-tooltip.pl-tooltip {
-  background: rgb(13 15 19 / 0.95);
+  background: var(--chart-tooltip-bg);
   color: var(--color-fg);
-  border: 1px solid var(--color-line-strong);
+  border: 1px solid var(--chart-tooltip-border);
   border-radius: 6px;
   font-size: 11px;
   box-shadow: none;

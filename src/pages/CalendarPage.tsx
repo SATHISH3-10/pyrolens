@@ -179,9 +179,9 @@ export default function CalendarPage() {
           canvasId="calendar-heatmap"
         />
         <p className="mt-3 text-[11px] text-fg-faint">
-          Row tags: <span className="font-semibold text-[#e8703a]">M→V</span> MODIS scaled to VIIRS (modelled) ·{' '}
-          <span className="font-semibold text-[#22b07d]">M+V</span> both sensors observed ·{' '}
-          <span className="font-semibold text-[#3987e5]">V</span> VIIRS only. Classes are percentiles of all active days in this area's record.
+          Row tags: <span className="font-semibold text-fg">M→V</span> MODIS scaled to VIIRS (modelled) ·{' '}
+          <span className="font-semibold text-fg">M+V</span> both sensors observed ·{' '}
+          <span className="font-semibold text-fg">V</span> VIIRS only. Classes are percentiles of all active days in this area's record.
         </p>
       </Card>
 

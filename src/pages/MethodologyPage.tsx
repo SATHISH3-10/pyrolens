@@ -89,13 +89,13 @@ export default function MethodologyPage() {
                 </thead>
                 <tbody className="divide-y divide-line">
                   <tr>
-                    <td className="px-4 py-2 font-semibold" style={{ color: SENSOR_COLORS.MODIS }}>MODIS C6.1</td>
+                    <td className="px-4 py-2 font-semibold"><span aria-hidden="true" className="mr-1.5 inline-block size-2 rounded-full" style={{ background: SENSOR_COLORS.MODIS }} />MODIS C6.1</td>
                     <td className="px-4 py-2">Terra (2000), Aqua (2002)</td>
                     <td className="px-4 py-2">1 km</td>
                     <td className="px-4 py-2">Long historical baseline</td>
                   </tr>
                   <tr>
-                    <td className="px-4 py-2 font-semibold" style={{ color: SENSOR_COLORS.VIIRS }}>VIIRS 375 m</td>
+                    <td className="px-4 py-2 font-semibold"><span aria-hidden="true" className="mr-1.5 inline-block size-2 rounded-full" style={{ background: SENSOR_COLORS.VIIRS }} />VIIRS 375 m</td>
                     <td className="px-4 py-2">S-NPP (2012), NOAA-20 (2018), NOAA-21 (2024)</td>
                     <td className="px-4 py-2">375 m</td>
                     <td className="px-4 py-2">Modern reference scale</td>

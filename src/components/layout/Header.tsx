@@ -4,6 +4,7 @@ import { InfoTip } from '@/components/ui'
 import { LogoMark } from './Logo'
 import { StudyAreaPicker } from './StudyAreaPicker'
 import { DateRangeControl } from './DateRangeControl'
+import { ThemeToggle } from './ThemeToggle'
 
 interface HeaderProps {
   onOpenMobileNav: () => void
@@ -54,7 +55,8 @@ export function Header({ onOpenMobileNav }: HeaderProps) {
       <LogoMark className="size-7 lg:hidden" />
       <StudyAreaPicker />
       <DateRangeControl />
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-2">
+        <ThemeToggle />
         <DataSourcePill />
       </div>
     </header>

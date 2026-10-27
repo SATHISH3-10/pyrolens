@@ -12,7 +12,7 @@ interface LinkButtonProps {
 }
 
 const VARIANTS = {
-  primary: 'bg-ember-500 text-ink-950 hover:bg-ember-400 border-transparent font-semibold',
+  primary: 'bg-ember-500 text-on-accent hover:bg-ember-600 border-transparent font-semibold',
   secondary: 'bg-ink-700 text-fg hover:bg-ink-600 border-line-strong',
   ghost: 'bg-transparent text-fg-muted hover:bg-ink-700 hover:text-fg border-transparent',
 } as const

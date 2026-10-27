@@ -48,7 +48,7 @@ export function AppShell() {
     <div className="flex h-dvh bg-ink-950">
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-[2000] focus:rounded-lg focus:bg-ember-500 focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-ink-950"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-[2000] focus:rounded-lg focus:bg-ember-500 focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-on-accent"
       >
         Skip to main content
       </a>

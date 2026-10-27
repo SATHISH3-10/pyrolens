@@ -413,7 +413,7 @@ export default function FireMapPage() {
               onClick={() => setTool(t)}
               className={cn(
                 'flex size-8 items-center justify-center rounded-lg transition-colors',
-                tool === t ? 'bg-ember-500 text-ink-950' : 'text-fg-muted hover:bg-ink-700 hover:text-fg',
+                tool === t ? 'bg-ember-500 text-on-accent' : 'text-fg-muted hover:bg-ink-700 hover:text-fg',
               )}
             >
               <Icon className="size-4" />
@@ -538,8 +538,8 @@ export default function FireMapPage() {
                 {windowObs.length > 0 && (
                   <div className="mt-3">
                     <div className="mb-1 flex justify-between text-[11px]">
-                      <span style={{ color: SENSOR_COLORS.MODIS }}>MODIS {fmtNum(stats.modis)}</span>
-                      <span style={{ color: SENSOR_COLORS.VIIRS }}>VIIRS {fmtNum(stats.viirs)}</span>
+                      <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="size-2 rounded-full" style={{ background: SENSOR_COLORS.MODIS }} />MODIS {fmtNum(stats.modis)}</span>
+                      <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="size-2 rounded-full" style={{ background: SENSOR_COLORS.VIIRS }} />VIIRS {fmtNum(stats.viirs)}</span>
                     </div>
                     <div className="flex h-1.5 gap-0.5 overflow-hidden rounded-full">
                       <div style={{ flex: stats.modis, background: SENSOR_COLORS.MODIS }} />

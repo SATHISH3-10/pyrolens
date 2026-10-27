@@ -6,7 +6,8 @@ import { buildOutlook, CLASS_LABEL } from '@/utils/burningActivity'
 import { Card, InfoTip } from '@/components/ui'
 import { cn, fmtDate, fmtDayMonth } from '@/lib'
 import { ACTIVITY_COLORS, RISK_STYLES } from './activityScale'
-import { AXIS_TICK, TOOLTIP_STYLE } from './chartTheme'
+import { chartStyles } from './chartTheme'
+import { useTheme } from '@/context/ThemeContext'
 
 interface OutlookCardProps {
   analysis: ActivityAnalysis
@@ -18,6 +19,8 @@ const RISK_SCALE = ['low', 'moderate', 'elevated', 'critical'] as const
 
 export function OutlookCard({ analysis, referenceDate, className }: OutlookCardProps) {
   const outlook = useMemo(() => buildOutlook(analysis, referenceDate), [analysis, referenceDate])
+  const { tokens } = useTheme()
+  const cs = chartStyles(tokens)
   if (!outlook) return null
   const style = RISK_STYLES[outlook.risk]
   const TrendIcon = outlook.trend === 'rising' ? ArrowUpRight : outlook.trend === 'falling' ? ArrowDownRight : ArrowRight
@@ -68,7 +71,7 @@ export function OutlookCard({ analysis, referenceDate, className }: OutlookCardP
             <span className="text-xl font-semibold text-fg tabular">{outlook.latestBai.toFixed(0)}</span>
             <span
               className="rounded px-1 py-px text-[10px] font-semibold"
-              style={{ background: `${ACTIVITY_COLORS[outlook.latestClass]}33`, color: outlook.latestClass === 'none' ? '#a1a9b6' : ACTIVITY_COLORS[outlook.latestClass] }}
+              style={{ background: `color-mix(in srgb, ${ACTIVITY_COLORS[outlook.latestClass]} 22%, transparent)`, color: 'var(--color-fg)' }}
             >
               {CLASS_LABEL[outlook.latestClass]}
             </span>
@@ -103,16 +106,16 @@ export function OutlookCard({ analysis, referenceDate, className }: OutlookCardP
           <ComposedChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -28 }}>
             <XAxis
               dataKey="date"
-              tick={AXIS_TICK}
+              tick={cs.tick}
               tickFormatter={fmtDayMonth}
               interval="preserveStartEnd"
               minTickGap={40}
               axisLine={false}
               tickLine={false}
             />
-            <YAxis tick={AXIS_TICK} axisLine={false} tickLine={false} domain={[0, 100]} ticks={[0, 50, 100]} />
+            <YAxis tick={cs.tick} axisLine={false} tickLine={false} domain={[0, 100]} ticks={[0, 50, 100]} />
             <Tooltip
-              {...TOOLTIP_STYLE}
+              {...cs.tooltip}
               labelFormatter={(d) => fmtDate(String(d))}
               formatter={(v, name) =>
                 name === 'band' && Array.isArray(v)
@@ -123,14 +126,14 @@ export function OutlookCard({ analysis, referenceDate, className }: OutlookCardP
             <Area
               dataKey="band"
               stroke="none"
-              fill="#3987e5"
-              fillOpacity={0.18}
+              fill={tokens.chart.band}
+              fillOpacity={1}
               isAnimationActive={false}
               name="band"
             />
             <Line
               dataKey="bai"
-              stroke="#ff8a1f"
+              stroke={tokens.accent}
               strokeWidth={2}
               dot={false}
               isAnimationActive={false}
@@ -145,7 +148,7 @@ export function OutlookCard({ analysis, referenceDate, className }: OutlookCardP
           <span className="h-0.5 w-3 rounded bg-ember-500" /> Last 30 days
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-2.5 w-3 rounded-sm bg-[#3987e5]/30" /> Normal range, then next 4 weeks
+          <span className="h-2.5 w-3 rounded-sm" style={{ background: 'var(--chart-band)' }} /> Normal range, then next 4 weeks
         </span>
       </div>
 
