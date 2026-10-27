@@ -1,10 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, CalendarDays, Flame, Map as MapIcon, TrendingUp } from 'lucide-react'
 import { useFireData } from '@/context/FireDataContext'
-import { Card, CardHeader, EmptyState, LinkButton, PageHeader, Segmented, Stat } from '@/components/ui'
-import { CalendarHeatmap, type CalendarResolution } from '@/components/viz/CalendarHeatmap'
-import { ActivityLegend } from '@/components/viz/ActivityLegend'
+import { Card, CardHeader, EmptyState, LinkButton, PageHeader, Stat } from '@/components/ui'
+import { BurningCalendar } from '@/components/calendar/BurningCalendar'
 import { OutlookCard } from '@/components/viz/OutlookCard'
 import { ShortRecordNotice } from '@/components/viz/ShortRecordNotice'
 import { SeasonTimeline } from '@/components/viz/SeasonTimeline'
@@ -28,9 +27,8 @@ const FLAG_STYLE: Record<string, string> = {
 }
 
 export default function DashboardPage() {
-  const { analysis, area, filter, setFilter, setSelectedDate } = useFireData()
+  const { analysis, area, filter, setFilter, selectedDate, setSelectedDate, isPlaying } = useFireData()
   const navigate = useNavigate()
-  const [resolution, setResolution] = useState<CalendarResolution>('day')
   const rangeDays = useRangeDays()
 
   const stats = useMemo(() => {
@@ -175,30 +173,23 @@ export default function DashboardPage() {
       <Card>
         <CardHeader
           title="Burning Activity Calendar"
-          description="Each row is a year; each cell a day, week or month coloured by its BAI class. Click a cell to inspect it."
-          info="Row labels show the data source: M→V = MODIS scaled to VIIRS (modelled), M+V = both sensors observed, V = VIIRS only."
-          action={
-            <Segmented
-              aria-label="Calendar resolution"
-              value={resolution}
-              onChange={setResolution}
-              options={[
-                { value: 'day', label: 'Daily' },
-                { value: 'week', label: 'Weekly' },
-                { value: 'month', label: 'Monthly' },
-              ]}
-            />
-          }
+          description="Each row is a year (oldest at top) and each cell a week, coloured by its BAI class. The bar at the right is the year's harmonized total. Click a week to open it in the full calendar."
+          info="Centre dots mark MODIS-scaled (pre-VIIRS) estimates; hatched cells have no satellite coverage; dashed cells are outside the loaded record."
         />
-        <CalendarHeatmap
+        <BurningCalendar
           analysis={analysis}
-          resolution={resolution}
           startDate={filter.startDate}
           endDate={filter.endDate}
-          rowHeight={resolution === 'day' ? 11 : 14}
+          view="multi"
+          sensorView="harmonized"
+          smartFilter="none"
+          showSeasons={false}
+          selectedDate={selectedDate}
           onSelect={openDay}
+          isPlaying={isPlaying}
+          compact
+          showLegend={false}
         />
-        <ActivityLegend className="mt-4" compact />
       </Card>
 
       <div className="grid gap-5 lg:grid-cols-2">

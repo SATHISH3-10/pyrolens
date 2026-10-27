@@ -13,6 +13,9 @@ import type {
   SummaryMetrics,
 } from '@/types/fire'
 import { getRegionById, REGIONS } from '@/data/regions'
+import { confidenceLevel, satelliteKey } from '@/utils/mapFilters'
+
+const CONF_RANK = { low: 0, nominal: 1, high: 2 } as const
 
 /**
  * Standard spatial grid snapping key.
@@ -52,7 +55,7 @@ export function filterObservations(
   records: readonly FireObservation[],
   filter: ObservationFilter,
 ): FireObservation[] {
-  const { sensor, startDate, endDate, regionId, customPolygon, customAoi, daynight, minFrp } = filter
+  const { sensor, startDate, endDate, regionId, customPolygon, customAoi, daynight, minFrp, minConfidence, satellites } = filter
 
   const targetRegion = regionId !== 'all' && regionId !== 'custom' ? getRegionById(regionId) : undefined
   const activePolygon = customAoi?.points ?? customPolygon
@@ -103,6 +106,20 @@ export function filterObservations(
       if (obs.frp === null || obs.frp < minFrp) {
         return false
       }
+    }
+
+    // 7. Minimum confidence level (numeric MODIS values are compared directly)
+    if (minConfidence !== undefined && minConfidence !== 'ALL') {
+      if (typeof minConfidence === 'number') {
+        if (typeof obs.confidence === 'number' && obs.confidence < minConfidence) return false
+      } else if (CONF_RANK[confidenceLevel(obs)] < CONF_RANK[minConfidence]) {
+        return false
+      }
+    }
+
+    // 8. Satellites (normalized keys, so FIRMS codes like N20 and long names both match)
+    if (satellites && satellites.length > 0 && !satellites.includes(satelliteKey(obs))) {
+      return false
     }
 
     return true

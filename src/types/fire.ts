@@ -78,6 +78,8 @@ export interface ObservationFilter {
   minConfidence?: number | 'low' | 'nominal' | 'high' | 'ALL'
   minFrp?: number
   gridResolution?: 0.1 | 0.25 | 0.5
+  /** Normalized satellite keys to keep (Terra, Aqua, S-NPP, NOAA-20, NOAA-21); null/undefined = all. */
+  satellites?: string[] | null
 }
 
 export interface DatasetMeta {

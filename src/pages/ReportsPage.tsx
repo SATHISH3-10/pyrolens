@@ -14,23 +14,26 @@ import {
 } from 'lucide-react'
 import { useFireData } from '@/context/FireDataContext'
 import { Badge, Card, CardHeader, EmptyState, PageHeader } from '@/components/ui'
-import { CalendarHeatmap } from '@/components/viz/CalendarHeatmap'
-import { ActivityLegend } from '@/components/viz/ActivityLegend'
+import { BurningCalendar } from '@/components/calendar/BurningCalendar'
 import { ACTIVITY_COLORS, SOURCE_SHORT } from '@/components/viz/activityScale'
+import { useTheme } from '@/context/ThemeContext'
 import { buildOutlook, CLASS_LABEL, clusterFireEvents } from '@/utils/burningActivity'
 import { exportObservationsCsv, exportObservationsGeoJson } from '@/utils/exportUtils'
 import {
-  downloadCanvasPng,
+  composeCalendarImage,
+  exportCalendarImage,
+  exportComparisonCsv,
   exportDailyBaiCsv,
   exportFireEventsGeoJson,
   exportHarmonizationCsv,
   exportSummaryMarkdown,
   openPrintableReport,
+  type ExportMeta,
 } from '@/utils/exportActivity'
 import { useRangeDays } from '@/hooks/useRangeDays'
 import { fmtDate, fmtNum } from '@/lib'
 
-const CANVAS_ID = 'report-calendar'
+const EXPORT_ID = 'report-calendar'
 
 interface ExportItem {
   icon: typeof FileText
@@ -84,7 +87,8 @@ function Row({ k, v }: { k: string; v: ReactNode }) {
 }
 
 export default function ReportsPage() {
-  const { analysis, area, filter, customAoi, areaObservations, filteredObservations, metadata, setSelectedDate } = useFireData()
+  const { analysis, area, filter, customAoi, areaObservations, filteredObservations, metadata, selectedDate, setSelectedDate } = useFireData()
+  const { tokens } = useTheme()
   const rangeDays = useRangeDays()
   const navigate = useNavigate()
 
@@ -107,6 +111,20 @@ export default function ReportsPage() {
   }
 
   const slug = `${area.id}_${filter.startDate}_${filter.endDate}`
+  const meta: ExportMeta = {
+    area: customAoi ? `${area.name} — AOI ${customAoi.name}` : area.name,
+    start: filter.startDate,
+    end: filter.endDate,
+    source: metadata.isSynthetic ? 'SYNTHETIC DEMO DATA (not NASA observations)' : metadata.title,
+    isDemo: metadata.isSynthetic,
+  }
+  const calendarImage = () =>
+    composeCalendarImage({
+      exportId: EXPORT_ID,
+      tokens,
+      title: `${meta.area} · ${filter.startDate.slice(0, 4)}–${filter.endDate.slice(0, 4)} weekly Burning Activity Index`,
+      subtitle: `${meta.source} · ${fmtDate(filter.startDate)} – ${fmtDate(filter.endDate)}`,
+    })
   const summaryInput = () => ({
     analysis,
     areaName: customAoi ? `${area.name} — ${customAoi.name}` : area.name,
@@ -119,45 +137,60 @@ export default function ReportsPage() {
   const items: ExportItem[] = [
     {
       icon: FileSpreadsheet,
-      title: 'Daily BAI table',
+      title: 'Selected range: daily BAI',
       format: 'CSV',
-      description: `${fmtNum(rangeDays.length)} days: BAI, class, harmonized values with uncertainty, per-sensor counts, FRP, data source, quality and climatology thresholds.`,
-      run: () => exportDailyBaiCsv(rangeDays, area.name, `pyrolens_daily_bai_${slug}.csv`),
+      description: `${fmtNum(rangeDays.length)} days in the header range: BAI, class, harmonized values with uncertainty, per-sensor counts, FRP, source, quality and climatology thresholds.`,
+      run: () => exportDailyBaiCsv(rangeDays, meta, `pyrolens_daily_bai_${slug}.csv`),
+    },
+    {
+      icon: FileSpreadsheet,
+      title: 'MODIS / VIIRS / harmonized',
+      format: 'CSV',
+      description: 'Side-by-side daily raw MODIS and VIIRS counts, per-satellite values, the r(m) factor used and the harmonized value with its range.',
+      run: () => exportComparisonCsv(rangeDays, analysis, meta, `pyrolens_sensor_comparison_${slug}.csv`),
     },
     {
       icon: Shapes,
       title: 'Fire clusters',
       format: 'GeoJSON',
       description: 'Spatio-temporal fire events as convex-hull polygons with start/end, duration, detections, FRP and sensors.',
-      run: () => exportFireEventsGeoJson(clusterFireEvents(rangeObs), `pyrolens_fire_clusters_${slug}.geojson`),
+      run: () => exportFireEventsGeoJson(clusterFireEvents(rangeObs), meta, `pyrolens_fire_clusters_${slug}.geojson`),
     },
     {
       icon: FileText,
       title: 'Filtered raw hotspots',
       format: 'CSV',
-      description: `${fmtNum(filteredObservations.length)} detections matching the area, AOI and dates, with satellite, confidence, FRP and day/night.`,
-      run: () => exportObservationsCsv(filteredObservations, `pyrolens_hotspots_${slug}.csv`),
+      description: `${fmtNum(filteredObservations.length)} detections matching the area, AOI, dates and map filters, with satellite, confidence, FRP and day/night.`,
+      run: () => exportObservationsCsv(filteredObservations, `pyrolens_hotspots_${slug}.csv`, meta),
     },
     {
       icon: Braces,
       title: 'Raw hotspots',
       format: 'GeoJSON',
       description: 'Point features for GIS tools (first 15,000 detections).',
-      run: () => exportObservationsGeoJson(filteredObservations, `pyrolens_hotspots_${slug}.geojson`),
+      run: () => exportObservationsGeoJson(filteredObservations, `pyrolens_hotspots_${slug}.geojson`, meta),
     },
     {
       icon: ImageDown,
       title: 'Calendar image',
       format: 'PNG',
-      description: 'The burning activity calendar shown below, at screen resolution.',
-      run: () => downloadCanvasPng(CANVAS_ID, `pyrolens_calendar_${slug}.png`),
+      description: `The calendar below with its legend, in the current (${tokens.mode}) theme.`,
+      run: () =>
+        exportCalendarImage({
+          exportId: EXPORT_ID,
+          tokens,
+          sensorView: 'harmonized',
+          title: `${meta.area} · weekly Burning Activity Index`,
+          subtitle: `${meta.source} · ${fmtDate(filter.startDate)} – ${fmtDate(filter.endDate)}`,
+          fileName: `pyrolens_calendar_${slug}_${tokens.mode}.png`,
+        }),
     },
     {
       icon: Printer,
       title: 'Printable report',
       format: 'PDF',
       description: 'Opens a one-page report with outlook, calendar, seasons and harmonization factors. Use “Save as PDF” in the print dialog.',
-      run: () => openPrintableReport(summaryInput(), CANVAS_ID),
+      run: () => openPrintableReport(summaryInput(), calendarImage()),
     },
     {
       icon: Sigma,
@@ -171,7 +204,7 @@ export default function ReportsPage() {
       title: 'Harmonization factors',
       format: 'CSV',
       description: 'Monthly VIIRS:MODIS factors r(m) with IQR, FRP and cluster ratios and overlap-year counts.',
-      run: () => exportHarmonizationCsv(analysis, `pyrolens_harmonization_${area.id}.csv`),
+      run: () => exportHarmonizationCsv(analysis, meta, `pyrolens_harmonization_${area.id}.csv`),
     },
   ]
 
@@ -208,18 +241,22 @@ export default function ReportsPage() {
       </div>
 
       <Card>
-        <CardHeader title="Calendar preview" description="This is the image used for the PNG and the printable report." action={<ActivityLegend compact showGaps={false} />} />
-        <CalendarHeatmap
+        <CardHeader title="Calendar preview" description="This is the image used for the PNG and the printable report. Click a week to open it in the Burning Calendar." />
+        <BurningCalendar
           analysis={analysis}
-          resolution="week"
           startDate={filter.startDate}
           endDate={filter.endDate}
-          rowHeight={14}
-          canvasId={CANVAS_ID}
+          view="multi"
+          sensorView="harmonized"
+          smartFilter="none"
+          showSeasons={false}
+          selectedDate={selectedDate}
           onSelect={(d) => {
             setSelectedDate(d)
             navigate('/calendar')
           }}
+          isPlaying={false}
+          exportId={EXPORT_ID}
         />
       </Card>
 

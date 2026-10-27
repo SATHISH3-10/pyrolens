@@ -17,6 +17,7 @@ import type { ActivityAnalysis, BaiWeights } from '@/types/activity'
 import { parseFirmsCsv } from '@/data/firmsCsvImporter'
 import { generateAreaArchive } from '@/data/demoArchive'
 import { DEFAULT_STUDY_AREA_ID, getStudyArea, type StudyArea } from '@/data/studyAreas'
+import { parseUrlDate } from '@/utils/calendarLayout'
 import { calculateSummaryMetrics, filterObservations } from '@/utils/aggregation'
 import { analyzeBurningActivity, DEFAULT_BAI_WEIGHTS } from '@/utils/burningActivity'
 
@@ -55,6 +56,9 @@ interface FireDataContextValue {
   setBaiWeights: (w: BaiWeights) => void
   selectedDate: string | null
   setSelectedDate: (date: string | null) => void
+  /** True while map playback is animating the selected date (the calendar shows an animated ring). */
+  isPlaying: boolean
+  setIsPlaying: (playing: boolean) => void
   selectedObservation: FireObservation | undefined
   selectedObservationId: string | null
   setSelectedObservationId: (id: string | null) => void
@@ -158,14 +162,33 @@ function loadPreset(id: string) {
   return { area, data, meta }
 }
 
-const initial = loadPreset(DEFAULT_STUDY_AREA_ID)
+/**
+ * Shareable links: the initial study area and selected date come from ?area=…&date=… when valid, so a link
+ * opens on the same view without a post-mount correction (useUrlSync only writes state back to the URL).
+ */
+function readUrlSelection(): { areaId: string; date: string | null } {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const urlArea = params.get('area')
+    return {
+      areaId: urlArea && getStudyArea(urlArea) ? urlArea : DEFAULT_STUDY_AREA_ID,
+      date: parseUrlDate(params.get('date')),
+    }
+  } catch {
+    return { areaId: DEFAULT_STUDY_AREA_ID, date: null }
+  }
+}
+
+const urlSelection = readUrlSelection()
+const initial = loadPreset(urlSelection.areaId)
 
 export function FireDataProvider({ children }: { children: ReactNode }) {
   const [observations, setObservations] = useState<FireObservation[]>(initial.data)
   const [metadata, setMetadata] = useState<DatasetMeta>(initial.meta)
   const [area, setArea] = useState<AreaFrame>(frameFromPreset(initial.area))
   const [selectedObservationId, setSelectedObservationId] = useState<string | null>(null)
-  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [selectedDate, setSelectedDate] = useState<string | null>(urlSelection.date)
+  const [isPlaying, setIsPlaying] = useState(false)
   const [isCsvModalOpen, setIsCsvModalOpen] = useState(false)
   const [customAoi, setCustomAoiState] = useState<CustomAoi | null>(null)
   const [baiWeights, setBaiWeights] = useState<BaiWeights>(DEFAULT_BAI_WEIGHTS)
@@ -320,6 +343,8 @@ export function FireDataProvider({ children }: { children: ReactNode }) {
       setBaiWeights,
       selectedDate,
       setSelectedDate,
+      isPlaying,
+      setIsPlaying,
       selectedObservation,
       selectedObservationId,
       setSelectedObservationId,
@@ -345,6 +370,7 @@ export function FireDataProvider({ children }: { children: ReactNode }) {
       analysis,
       baiWeights,
       selectedDate,
+      isPlaying,
       selectedObservation,
       selectedObservationId,
       loadSyntheticData,

@@ -21,7 +21,7 @@ export function Stat({ label, value, hint, info, accent, className }: StatProps)
         {info && <InfoTip>{info}</InfoTip>}
       </div>
       <div className="mt-1.5 text-[1.375rem] font-semibold leading-tight tracking-tight text-fg tabular">{value}</div>
-      {hint && <div className="mt-1 truncate text-xs text-fg-faint">{hint}</div>}
+      {hint && <div className="mt-1 break-words text-xs text-fg-faint">{hint}</div>}
     </div>
   )
 }

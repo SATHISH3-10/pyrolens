@@ -287,45 +287,58 @@
   }
 }
 
-/* ─── Leaflet (day-detail mini map only) ──────────────────────────────────── */
+/* ─── MapLibre (Fire Map) ─────────────────────────────────────────────────── */
 
-.leaflet-container {
+.maplibregl-map {
   font-family: inherit;
-  background-color: var(--map-bg) !important;
 }
-.leaflet-bar {
-  border: none !important;
-  box-shadow: var(--shadow-float) !important;
-  border-radius: 0.6rem !important;
-  overflow: hidden;
-}
-.leaflet-bar a {
-  background-color: var(--panel-bg) !important;
-  color: var(--color-fg) !important;
-  border-bottom-color: var(--color-line) !important;
-}
-.leaflet-control-attribution {
-  background: var(--panel-bg) !important;
-  color: var(--color-fg-muted) !important;
-  font-size: 10px !important;
-}
-.leaflet-control-attribution a {
-  color: var(--color-fg) !important;
-}
-.leaflet-crosshair,
-.leaflet-crosshair .leaflet-interactive {
-  cursor: crosshair !important;
-}
-.leaflet-tooltip.pl-tooltip {
+.maplibregl-popup.pl-popup .maplibregl-popup-content {
   background: var(--chart-tooltip-bg);
   color: var(--color-fg);
   border: 1px solid var(--chart-tooltip-border);
-  border-radius: 6px;
-  font-size: 11px;
-  box-shadow: none;
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-float);
+  padding: 12px 14px;
 }
-.leaflet-tooltip.pl-tooltip::before {
+.maplibregl-popup.pl-popup .maplibregl-popup-tip {
   display: none;
+}
+.maplibregl-popup.pl-popup .maplibregl-popup-close-button {
+  color: var(--color-fg-muted);
+  font-size: 18px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+.maplibregl-popup.pl-popup .maplibregl-popup-close-button:hover {
+  background: var(--color-ink-700);
+  color: var(--color-fg);
+}
+.maplibregl-ctrl-group {
+  background: var(--panel-bg) !important;
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--shadow-float) !important;
+  backdrop-filter: blur(10px);
+}
+.maplibregl-ctrl-group button + button {
+  border-top-color: var(--color-line) !important;
+}
+:root[data-theme="dark"] .maplibregl-ctrl-group .maplibregl-ctrl-icon,
+:root[data-theme="dark"] .maplibregl-ctrl-attrib-button {
+  filter: invert(1) brightness(1.4);
+}
+.maplibregl-ctrl.maplibregl-ctrl-attrib {
+  background: var(--panel-bg);
+  color: var(--color-fg-muted);
+  font-size: 10px;
+}
+.maplibregl-ctrl-attrib a {
+  color: var(--color-fg);
+}
+.maplibregl-ctrl-scale {
+  background: var(--panel-bg);
+  color: var(--color-fg-muted);
+  border-color: var(--color-fg-muted);
 }
 
 @media print {

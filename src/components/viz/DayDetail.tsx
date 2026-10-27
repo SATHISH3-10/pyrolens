@@ -1,13 +1,14 @@
-import { useMemo } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, CloudOff, Map as MapIcon } from 'lucide-react'
-import { CircleMarker, MapContainer, TileLayer, Tooltip as LTooltip } from 'react-leaflet'
+import { ChevronLeft, ChevronRight, CloudOff, Map as MapIcon, SatelliteDish } from 'lucide-react'
 import type { ActivityAnalysis } from '@/types/activity'
 import type { FireObservation } from '@/types/fire'
 import { addDays, CLASS_LABEL, explainDay, isLowConfidence } from '@/utils/burningActivity'
+import { displayedAnomaly, historyYearsByDoy, MIN_ANOMALY_HISTORY_YEARS } from '@/utils/calendarLayout'
+import { confidenceLevel, satelliteKey } from '@/utils/mapFilters'
 import { Button, Card } from '@/components/ui'
+import { MiniMap } from '@/components/map/MiniMap'
 import { cn, fmtDate, fmtNum } from '@/lib'
-import { BASEMAPS } from '@/components/map/basemaps'
 import { ACTIVITY_COLORS, inkOn, SENSOR_COLORS, SOURCE_LABEL } from './activityScale'
 import { useTheme } from '@/context/ThemeContext'
 
@@ -19,66 +20,101 @@ interface DayDetailProps {
   className?: string
 }
 
-function confidenceBucket(o: FireObservation): 'low' | 'nominal' | 'high' {
-  if (typeof o.confidence === 'number') return o.confidence < 30 ? 'low' : o.confidence < 80 ? 'nominal' : 'high'
-  const s = String(o.confidence).toLowerCase()
-  return s.startsWith('l') ? 'low' : s.startsWith('h') ? 'high' : 'nominal'
+function Section({ title, tone, children }: { title: string; tone: 'observed' | 'estimated'; children: ReactNode }) {
+  return (
+    <section className={cn('rounded-xl border p-3', tone === 'observed' ? 'border-line bg-ink-900' : 'border-dashed border-line-strong')}>
+      <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
+        <span aria-hidden="true" className={cn('size-1.5 rounded-full', tone === 'observed' ? 'bg-fg-muted' : 'border border-fg-muted')} />
+        {title}
+      </h3>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">{children}</dl>
+    </section>
+  )
+}
+
+function Row({ k, v }: { k: string; v: ReactNode }) {
+  return (
+    <>
+      <dt className="text-fg-faint">{k}</dt>
+      <dd className="text-right font-medium text-fg tabular">{v}</dd>
+    </>
+  )
 }
 
 export function DayDetail({ analysis, date, observations, onChangeDate, className }: DayDetailProps) {
   const navigate = useNavigate()
-  const { resolved, tokens } = useTheme()
+  const { resolved } = useTheme()
   const idx = analysis.dayIndex.get(date)
   const day = idx !== undefined ? analysis.days[idx] : undefined
-
+  const history = useMemo(() => historyYearsByDoy(analysis.days), [analysis])
   const dayObs = useMemo(() => observations.filter((o) => o.acqDate === date), [observations, date])
 
   const detail = useMemo(() => {
     const conf = { low: 0, nominal: 0, high: 0 }
-    const passes = new Map<string, number>()
-    let frpSum = 0
+    const sats = new Map<string, number>()
     let frpN = 0
-    let lat = 0
-    let lng = 0
+    let frpSum = 0
     for (const o of dayObs) {
-      conf[confidenceBucket(o)]++
-      const key = `${o.satellite} · ${o.daynight === 'D' ? 'day' : 'night'}`
-      passes.set(key, (passes.get(key) ?? 0) + 1)
+      conf[confidenceLevel(o)]++
+      const k = `${satelliteKey(o)} ${o.daynight === 'D' ? 'day' : 'night'}`
+      sats.set(k, (sats.get(k) ?? 0) + 1)
       if (o.frp !== null && !isLowConfidence(o)) {
         frpSum += o.frp
         frpN++
       }
-      lat += o.latitude
-      lng += o.longitude
     }
-    const center: [number, number] | null = dayObs.length ? [lat / dayObs.length, lng / dayObs.length] : null
-    return { conf, passes: [...passes.entries()].sort((a, b) => b[1] - a[1]), frpSum, frpMean: frpN ? frpSum / frpN : null, center }
+    return { conf, sats: [...sats.entries()].sort((a, b) => b[1] - a[1]), frpMean: frpN ? frpSum / frpN : null, hasFrp: frpN > 0 }
   }, [dayObs])
 
-  if (!day) return null
-  const explanation = explainDay(day, analysis)
-  const total = day.modisCount + day.viirsCount
-  const confTotal = detail.conf.low + detail.conf.nominal + detail.conf.high
   const canPrev = date > analysis.firstDate
   const canNext = date < analysis.lastDate
+  const header = (
+    <div className="flex items-center justify-between gap-2">
+      <Button variant="ghost" size="sm" aria-label="Previous day" disabled={!canPrev} onClick={() => onChangeDate(addDays(date, -1))}>
+        <ChevronLeft className="size-4" aria-hidden="true" />
+      </Button>
+      <div className="text-center">
+        <h2 id="day-detail-title" className="text-sm font-semibold text-fg">
+          {new Date(`${date}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', timeZone: 'UTC' })}
+        </h2>
+        <p className="text-xs text-fg-muted">{fmtDate(date)}</p>
+      </div>
+      <Button variant="ghost" size="sm" aria-label="Next day" disabled={!canNext} onClick={() => onChangeDate(addDays(date, 1))}>
+        <ChevronRight className="size-4" aria-hidden="true" />
+      </Button>
+    </div>
+  )
+
+  if (!day || day.source === 'none') {
+    return (
+      <Card className={cn('flex flex-col', className)} aria-labelledby="day-detail-title">
+        {header}
+        <div className="mt-4 flex items-start gap-3 rounded-xl border border-line bg-ink-900 p-3.5">
+          <SatelliteDish className="mt-0.5 size-5 shrink-0 text-fg-muted" aria-hidden="true" />
+          <p className="text-xs leading-relaxed text-fg-muted">
+            {day
+              ? 'No satellite in the loaded record covered this date, so burning activity is unknown — not zero.'
+              : 'This date is outside the loaded record; coverage is unknown.'}
+          </p>
+        </div>
+      </Card>
+    )
+  }
+
+  const anomaly = displayedAnomaly(day, history)
+  const insufficient = anomaly === 'insufficient'
+  // Anomaly honesty: drop the percentile-comparison sentence when there is too little history to judge.
+  const explanation = explainDay(day, analysis)
+    .filter((s) => !(insufficient && (s.startsWith('That is above') || s.startsWith('Activity is within') || s.startsWith('Activity is below'))))
+    .concat(insufficient ? [`Not enough history to assess anomalies for this time of year (fewer than ${MIN_ANOMALY_HISTORY_YEARS} covered years).`] : [])
   const limitedEmpty = day.cls === 'none' && day.quality === 'limited'
+  const scaled = day.source === 'modis_scaled'
+  const factor = analysis.model.factors[day.month - 1]!
+  const confTotal = detail.conf.low + detail.conf.nominal + detail.conf.high
 
   return (
     <Card className={cn('flex flex-col', className)} aria-labelledby="day-detail-title">
-      <div className="flex items-center justify-between gap-2">
-        <Button variant="ghost" size="sm" aria-label="Previous day" disabled={!canPrev} onClick={() => onChangeDate(addDays(date, -1))}>
-          <ChevronLeft className="size-4" />
-        </Button>
-        <div className="text-center">
-          <h2 id="day-detail-title" className="text-sm font-semibold text-fg">
-            {new Date(`${date}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', timeZone: 'UTC' })}
-          </h2>
-          <p className="text-xs text-fg-muted">{fmtDate(date)}</p>
-        </div>
-        <Button variant="ghost" size="sm" aria-label="Next day" disabled={!canNext} onClick={() => onChangeDate(addDays(date, 1))}>
-          <ChevronRight className="size-4" />
-        </Button>
-      </div>
+      {header}
 
       <div className="mt-4 flex items-center gap-4 rounded-xl border border-line bg-ink-900 p-3.5">
         <div
@@ -100,9 +136,9 @@ export function DayDetail({ analysis, date, observations, onChangeDate, classNam
           </div>
           <div className="mt-1 flex flex-wrap gap-1">
             <span className="rounded bg-ink-700 px-1.5 py-0.5 text-[10px] font-medium text-fg-muted">{SOURCE_LABEL[day.source]}</span>
-            {day.anomaly !== 'none' && (
+            {(anomaly === 'above_normal' || anomaly === 'extreme') && (
               <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">
-                {day.anomaly === 'extreme' ? 'Extreme anomaly' : 'Above normal'}
+                {anomaly === 'extreme' ? 'Extreme anomaly' : 'Above normal'}
               </span>
             )}
             {day.criticalPeriodId !== null && (
@@ -120,103 +156,84 @@ export function DayDetail({ analysis, date, observations, onChangeDate, classNam
         ))}
       </div>
 
-      <dl className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line text-xs">
-        {[
-          ['Hotspots (QC)', fmtNum(total)],
-          ['Harmonized', `${day.harmonizedCount.toFixed(1)} /sat`],
-          ['Total FRP', `${fmtNum(day.modisFrp + day.viirsFrp)} MW`],
-          ['Mean / max FRP', `${detail.frpMean !== null ? detail.frpMean.toFixed(1) : '—'} / ${day.maxFrp !== null ? day.maxFrp.toFixed(0) : '—'} MW`],
-          ['Fire clusters', `${day.modisClusters} M · ${day.viirsClusters} V`],
-          ['Day / night', `${day.dayDetections} / ${day.nightDetections}`],
-          ['Low-conf. removed', fmtNum(day.lowConfidenceRemoved)],
-          ['Observation quality', `${Math.round(day.qualityScore * 100)}%`],
-        ].map(([k, v]) => (
-          <div key={k} className="bg-ink-850 px-3 py-2">
-            <dt className="text-[11px] text-fg-faint">{k}</dt>
-            <dd className="mt-0.5 font-medium text-fg tabular">{v}</dd>
-          </div>
-        ))}
-      </dl>
-
-      {total > 0 && (
-        <div className="mt-4">
-          <div className="mb-1.5 flex justify-between text-[11px] text-fg-faint">
-            <span>Sensor contribution</span>
-            <span>
-              <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="size-2 rounded-full" style={{ background: SENSOR_COLORS.MODIS }} />MODIS {day.modisCount}</span> ·{' '}
-              <span className="inline-flex items-center gap-1"><span aria-hidden="true" className="size-2 rounded-full" style={{ background: SENSOR_COLORS.VIIRS }} />VIIRS {day.viirsCount}</span>
-            </span>
-          </div>
-          <div className="flex h-2 gap-0.5 overflow-hidden rounded-full">
-            <div style={{ flex: day.modisCount, background: SENSOR_COLORS.MODIS }} />
-            <div style={{ flex: day.viirsCount, background: SENSOR_COLORS.VIIRS }} />
-          </div>
-          {confTotal > 0 && (
-            <>
-              <div className="mb-1.5 mt-3 flex justify-between text-[11px] text-fg-faint">
-                <span>Detection confidence</span>
-                <span>
-                  {detail.conf.high} high · {detail.conf.nominal} nominal · {detail.conf.low} low
+      <div className="mt-4 space-y-2.5">
+        <Section title="Observed by satellites" tone="observed">
+          <Row
+            k="MODIS"
+            v={
+              day.modisSats > 0 ? (
+                <span className="inline-flex items-center gap-1">
+                  <span aria-hidden="true" className="size-2 rounded-full" style={{ background: SENSOR_COLORS.MODIS }} />
+                  {fmtNum(day.modisCount)} det. · {day.modisSats} sat.
                 </span>
-              </div>
-              <div className="flex h-2 gap-0.5 overflow-hidden rounded-full">
-                <div style={{ flex: detail.conf.high, background: 'var(--color-fg-muted)' }} />
-                <div style={{ flex: detail.conf.nominal, background: 'var(--color-ink-500)' }} />
-                <div style={{ flex: detail.conf.low, background: 'var(--color-ink-600)' }} />
-              </div>
-            </>
+              ) : (
+                'not flying'
+              )
+            }
+          />
+          <Row
+            k="VIIRS"
+            v={
+              day.viirsSats > 0 ? (
+                <span className="inline-flex items-center gap-1">
+                  <span aria-hidden="true" className="size-2 rounded-full" style={{ background: SENSOR_COLORS.VIIRS }} />
+                  {fmtNum(day.viirsCount)} det. · {day.viirsSats} sat.
+                </span>
+              ) : (
+                'not yet launched / no data'
+              )
+            }
+          />
+          {detail.hasFrp && <Row k="Total FRP" v={`${fmtNum(day.modisFrp + day.viirsFrp)} MW`} />}
+          {detail.hasFrp && (
+            <Row k="Mean / max FRP" v={`${detail.frpMean !== null ? detail.frpMean.toFixed(1) : '—'} / ${day.maxFrp !== null ? day.maxFrp.toFixed(0) : '—'} MW`} />
           )}
-          {detail.passes.length > 0 && (
-            <div className="mt-3">
-              <div className="mb-1 text-[11px] text-fg-faint">Satellite passes with detections</div>
-              <div className="flex flex-wrap gap-1">
-                {detail.passes.map(([k, n]) => (
-                  <span key={k} className="rounded bg-ink-700 px-1.5 py-0.5 text-[10px] text-fg-muted">
-                    {k} <span className="text-fg tabular">{n}</span>
-                  </span>
-                ))}
-              </div>
+          <Row k="Fire clusters" v={`${day.modisClusters} MODIS · ${day.viirsClusters} VIIRS`} />
+          <Row k="Day / night" v={`${day.dayDetections} / ${day.nightDetections}`} />
+          {confTotal > 0 && <Row k="Confidence" v={`${detail.conf.high} high · ${detail.conf.nominal} nom. · ${detail.conf.low} low`} />}
+          {day.lowConfidenceRemoved > 0 && <Row k="Low-conf. removed" v={fmtNum(day.lowConfidenceRemoved)} />}
+          <Row k="Quality" v={day.quality === 'limited' ? 'Limited observation' : `Good (${Math.round(day.qualityScore * 100)}%)`} />
+          {detail.sats.length > 0 && (
+            <div className="col-span-2 mt-1 flex flex-wrap gap-1">
+              {detail.sats.map(([k, n]) => (
+                <span key={k} className="rounded bg-ink-700 px-1.5 py-0.5 text-[10px] text-fg-muted">
+                  {k} <span className="tabular text-fg">{n}</span>
+                </span>
+              ))}
             </div>
           )}
+        </Section>
+
+        <Section title={scaled ? 'Estimated (modelled from MODIS)' : 'Derived'} tone="estimated">
+          <Row
+            k="Harmonized"
+            v={
+              scaled
+                ? `${day.harmonizedCount.toFixed(1)} (${day.harmonizedCountLow.toFixed(1)}–${day.harmonizedCountHigh.toFixed(1)}) /sat`
+                : `${day.harmonizedCount.toFixed(1)} /sat`
+            }
+          />
+          <Row k="BAI" v={`${day.bai.toFixed(0)} · ${day.cls === 'none' ? 'no detections' : CLASS_LABEL[day.cls]}`} />
+          {scaled && (
+            <Row
+              k={`r(${new Date(Date.UTC(2001, day.month - 1, 1)).toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' })})`}
+              v={`${factor.countRatio.toFixed(2)} (IQR ${factor.countQ25.toFixed(2)}–${factor.countQ75.toFixed(2)})`}
+            />
+          )}
+          {!insufficient && <Row k="Normal for date" v={`${day.climP50.toFixed(0)}–${day.climP90.toFixed(0)} BAI`} />}
+        </Section>
+      </div>
+
+      <p className="mt-3 text-[11px] leading-relaxed text-fg-faint">A hotspot is a satellite-detected thermal anomaly, not necessarily a confirmed wildfire.</p>
+
+      {dayObs.length > 0 && (
+        <div className="mt-3 h-44 overflow-hidden rounded-xl border border-line" aria-label={`Map of ${dayObs.length} detections on ${fmtDate(date)}`} role="img">
+          <MiniMap points={dayObs} />
         </div>
       )}
 
-      {detail.center && (
-        <div className="mt-4 h-44 overflow-hidden rounded-xl border border-line">
-          <MapContainer
-            key={date}
-            center={detail.center}
-            zoom={7}
-            preferCanvas
-            zoomControl={false}
-            attributionControl={false}
-            scrollWheelZoom={false}
-            style={{ height: '100%', width: '100%' }}
-          >
-            <TileLayer url={BASEMAPS[resolved === 'light' ? 'light' : 'dark'].url} />
-            <TileLayer url={BASEMAPS[resolved === 'light' ? 'light' : 'dark'].labels!} />
-            {dayObs.slice(0, 1500).map((o) => (
-              <CircleMarker
-                key={o.id}
-                center={[o.latitude, o.longitude]}
-                radius={o.instrument === 'MODIS' ? 4 : 3}
-                pathOptions={{
-                  color: o.instrument === 'MODIS' ? tokens.sensors.MODIS : tokens.sensors.VIIRS,
-                  weight: 1,
-                  fillOpacity: 0.8,
-                }}
-              >
-                <LTooltip className="pl-tooltip">
-                  {o.satellite} · {o.frp ?? '—'} MW
-                </LTooltip>
-              </CircleMarker>
-            ))}
-          </MapContainer>
-        </div>
-      )}
-
-      <Button variant="secondary" className="mt-4" onClick={() => navigate('/map', { state: { focusDate: date } })}>
-        <MapIcon className="size-4" aria-hidden="true" /> Open this day on the map
+      <Button variant="secondary" className="mt-4" onClick={() => navigate({ pathname: '/map', search: window.location.search }, { state: { focusDate: date } })}>
+        <MapIcon className="size-4" aria-hidden="true" /> Open on map
       </Button>
     </Card>
   )

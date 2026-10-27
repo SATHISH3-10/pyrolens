@@ -1,16 +1,23 @@
-import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, ImageDown, RotateCcw, SlidersHorizontal } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { CalendarDays, ImageDown, RotateCcw, SlidersHorizontal, X } from 'lucide-react'
 import { useFireData } from '@/context/FireDataContext'
+import { useTheme } from '@/context/ThemeContext'
 import { Button, Card, CardHeader, EmptyState, PageHeader, Segmented } from '@/components/ui'
 import { Popover } from '@/components/ui/Popover'
-import { CalendarHeatmap, type CalendarEmphasis, type CalendarResolution } from '@/components/viz/CalendarHeatmap'
-import { ActivityLegend } from '@/components/viz/ActivityLegend'
+import { BurningCalendar, type CalendarView } from '@/components/calendar/BurningCalendar'
 import { ShortRecordNotice } from '@/components/viz/ShortRecordNotice'
 import { DayDetail } from '@/components/viz/DayDetail'
 import { DailyTimeSeries, DailyTimeSeriesLegend } from '@/components/viz/DailyTimeSeries'
 import { SOURCE_LABEL, SOURCE_SHORT } from '@/components/viz/activityScale'
 import { DEFAULT_BAI_WEIGHTS } from '@/utils/burningActivity'
-import { downloadCanvasPng } from '@/utils/exportActivity'
+import {
+  historyYearsByDoy,
+  SMART_FILTER_LABELS,
+  smartFilterAvailability,
+  type SensorView,
+  type SmartFilter,
+} from '@/utils/calendarLayout'
+import { exportCalendarImage } from '@/utils/exportActivity'
 import { useRangeDays } from '@/hooks/useRangeDays'
 import { cn, fmtDate, fmtNum } from '@/lib'
 import type { BaiWeights } from '@/types/activity'
@@ -92,10 +99,30 @@ function WeightsControl() {
 }
 
 export default function CalendarPage() {
-  const { analysis, area, filter, areaObservations, selectedDate, setSelectedDate } = useFireData()
-  const [resolution, setResolution] = useState<CalendarResolution>('day')
-  const [emphasis, setEmphasis] = useState<CalendarEmphasis>('none')
+  const { analysis, area, filter, areaObservations, selectedDate, setSelectedDate, isPlaying, metadata } = useFireData()
+  const [view, setView] = useState<CalendarView>('year')
+  const [sensorView, setSensorView] = useState<SensorView>('harmonized')
+  const [smartFilter, setSmartFilter] = useState<SmartFilter>('none')
+  const [showSeasons, setShowSeasons] = useState(false)
+  const [compareYears, setCompareYears] = useState<number[]>([])
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const detailsRef = useRef<HTMLDivElement>(null)
+  const { tokens } = useTheme()
   const rangeDays = useRangeDays()
+  const availability = useMemo(() => {
+    if (!analysis) return null
+    const base = smartFilterAvailability(analysis.days, historyYearsByDoy(analysis.days))
+    if (sensorView === 'harmonized') return base
+    const why = 'BAI-based highlight: switch the calendar to Harmonized.'
+    return { ...base, top_bai: why, extreme: why, anomalies: why, modis_scaled: why }
+  }, [analysis, sensorView])
+  const openDetails = () => {
+    setSheetOpen(true)
+    requestAnimationFrame(() => {
+      detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      detailsRef.current?.focus({ preventScroll: true })
+    })
+  }
 
   // Default to the most active day in range so the detail panel is never empty.
   const peakDate = useMemo(() => {
@@ -120,18 +147,29 @@ export default function CalendarPage() {
   const seasons = analysis.seasons.filter((s) => s.rangeEnd >= filter.startDate && s.rangeStart <= filter.endDate)
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6 pb-16 xl:pb-0">
       <PageHeader
         eyebrow="Burning Activity Calendar"
         title={`${area.name} · ${filter.startDate.slice(0, 4)}–${filter.endDate.slice(0, 4)}`}
-        description="One harmonized record of burning activity. Colours show each period's Burning Activity Index class; hatched cells mark suspicious gaps where clouds, smoke or missed overpasses may hide fires."
+        description="One harmonized record of burning activity. Fill shows each day's Burning Activity Index class; hatching, dashed borders and corner marks show where the satellite record is missing or limited — never as zero."
         actions={
           <>
             <WeightsControl />
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => downloadCanvasPng('calendar-heatmap', `pyrolens_calendar_${area.id}_${resolution}.png`)}
+              disabled={view === 'month'}
+              title={view === 'month' ? 'Switch to Year or Multi-year view to save an image' : 'Save the current view and its legend as PNG'}
+              onClick={() =>
+                exportCalendarImage({
+                  exportId: 'calendar-main',
+                  tokens,
+                  sensorView,
+                  title: `${area.name} · ${view === 'multi' ? `${filter.startDate.slice(0, 4)}–${filter.endDate.slice(0, 4)} weekly` : year}`,
+                  subtitle: `${sensorView === 'harmonized' ? 'Burning Activity Index (harmonized MODIS + VIIRS)' : `Raw ${sensorView.toUpperCase()} detections`} · ${metadata.isSynthetic ? 'SYNTHETIC DEMO DATA' : metadata.title}`,
+                  fileName: `pyrolens_calendar_${area.id}_${view}_${sensorView}_${tokens.mode}.png`,
+                })
+              }
             >
               <ImageDown className="size-3.5" aria-hidden="true" /> Save image
             </Button>
@@ -142,47 +180,104 @@ export default function CalendarPage() {
       <ShortRecordNotice analysis={analysis} />
 
       <Card>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Segmented
-              aria-label="Calendar resolution"
-              value={resolution}
-              onChange={setResolution}
-              options={[
-                { value: 'day', label: 'Daily' },
-                { value: 'week', label: 'Weekly' },
-                { value: 'month', label: 'Monthly' },
-              ]}
-            />
-            <Segmented
-              aria-label="Highlight"
-              value={emphasis}
-              onChange={setEmphasis}
-              options={[
-                { value: 'none', label: 'All activity' },
-                { value: 'anomalies', label: 'Anomalies', title: 'Fade everything except days above the 90th percentile for the date' },
-                { value: 'critical', label: 'Critical periods', title: 'Fade everything except runs of ≥3 High-or-above days' },
-              ]}
-            />
-          </div>
-          <ActivityLegend compact />
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Segmented
+            aria-label="Calendar view"
+            value={view}
+            onChange={setView}
+            options={[
+              { value: 'year', label: 'Year' },
+              { value: 'multi', label: 'Multi-year' },
+              { value: 'month', label: 'Month' },
+            ]}
+          />
+          <Segmented
+            aria-label="Sensor comparison"
+            value={sensorView}
+            onChange={setSensorView}
+            options={[
+              { value: 'harmonized', label: 'Harmonized', title: 'Burning Activity Index from harmonized MODIS + VIIRS' },
+              { value: 'modis', label: 'MODIS raw', title: 'Raw MODIS detection counts (own scale, not BAI)' },
+              { value: 'viirs', label: 'VIIRS raw', title: 'Raw VIIRS detection counts (own scale, not BAI)' },
+            ]}
+          />
+          <label className="flex items-center gap-1.5 text-xs text-fg-muted">
+            Highlight
+            <select value={smartFilter} onChange={(e) => setSmartFilter(e.target.value as SmartFilter)} className="field py-1 text-xs">
+              {(Object.keys(SMART_FILTER_LABELS) as SmartFilter[]).map((f) => (
+                <option key={f} value={f} disabled={!!availability?.[f]} title={availability?.[f] ?? undefined}>
+                  {SMART_FILTER_LABELS[f]}
+                  {availability?.[f] ? ' (unavailable)' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          {smartFilter !== 'none' && availability?.[smartFilter] === null && (
+            <span className="text-[11px] text-fg-faint">Non-matching cells are dimmed, not hidden.</span>
+          )}
+          {smartFilter !== 'none' && availability?.[smartFilter] && (
+            <span className="text-[11px] text-fg-faint">Highlight off: {availability[smartFilter]}</span>
+          )}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showSeasons}
+            onClick={() => setShowSeasons((s) => !s)}
+            className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${showSeasons ? 'border-ember-500 bg-ember-500/10 text-fg' : 'border-line text-fg-muted hover:text-fg'}`}
+          >
+            Season overlay
+          </button>
+          {view === 'year' && (
+            <label className="flex items-center gap-1.5 text-xs text-fg-muted">
+              Compare
+              <select
+                value=""
+                onChange={(e) => {
+                  const y = Number(e.target.value)
+                  if (y) setCompareYears((c) => (c.includes(y) ? c : [...c, y].slice(-2)))
+                }}
+                className="field py-1 text-xs"
+                aria-label="Add a year to compare (up to 2 more)"
+              >
+                <option value="">+ year</option>
+                {Array.from(
+                  { length: Number(analysis.lastDate.slice(0, 4)) - Number(analysis.firstDate.slice(0, 4)) + 1 },
+                  (_, i) => Number(analysis.firstDate.slice(0, 4)) + i,
+                )
+                  .filter((y) => y !== year)
+                  .map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+              </select>
+              {compareYears.map((y) => (
+                <span key={y} className="inline-flex items-center gap-1 rounded-full border border-line-strong bg-ink-700 py-0.5 pl-2 pr-1 text-[11px] text-fg">
+                  {y}
+                  <button type="button" aria-label={`Remove ${y} from comparison`} onClick={() => setCompareYears((c) => c.filter((x) => x !== y))} className="rounded-full p-0.5 hover:bg-ink-600">
+                    <X className="size-3" aria-hidden="true" />
+                  </button>
+                </span>
+              ))}
+            </label>
+          )}
         </div>
-        <CalendarHeatmap
+        <BurningCalendar
           analysis={analysis}
-          resolution={resolution}
           startDate={filter.startDate}
           endDate={filter.endDate}
+          view={view}
+          onViewChange={setView}
+          sensorView={sensorView}
+          smartFilter={smartFilter}
+          showSeasons={showSeasons}
+          compareYears={compareYears}
           selectedDate={date}
           onSelect={setSelectedDate}
-          emphasis={emphasis}
-          rowHeight={resolution === 'day' ? 15 : 18}
-          canvasId="calendar-heatmap"
+          onOpenDetails={openDetails}
+          isPlaying={isPlaying}
+          exportId="calendar-main"
         />
-        <p className="mt-3 text-[11px] text-fg-faint">
-          Row tags: <span className="font-semibold text-fg">M→V</span> MODIS scaled to VIIRS (modelled) ·{' '}
-          <span className="font-semibold text-fg">M+V</span> both sensors observed ·{' '}
-          <span className="font-semibold text-fg">V</span> VIIRS only. Classes are percentiles of all active days in this area's record.
-        </p>
       </Card>
 
       <div className="grid items-start gap-5 xl:grid-cols-12">
@@ -254,12 +349,34 @@ export default function CalendarPage() {
           </Card>
         </div>
 
-        <div className="xl:sticky xl:top-0 xl:col-span-4">
-          {date && (
-            <DayDetail analysis={analysis} date={date} observations={areaObservations} onChangeDate={setSelectedDate} />
-          )}
+        <div ref={detailsRef} tabIndex={-1} className="hidden outline-none xl:sticky xl:top-0 xl:col-span-4 xl:block">
+          {date && <DayDetail analysis={analysis} date={date} observations={areaObservations} onChangeDate={setSelectedDate} />}
         </div>
       </div>
+
+      {/* Small screens: the day panel is a bottom sheet. */}
+      {date && !sheetOpen && (
+        <button
+          type="button"
+          onClick={() => setSheetOpen(true)}
+          className="panel-float fixed bottom-4 left-1/2 z-40 -translate-x-1/2 px-4 py-2 text-[13px] font-semibold text-fg xl:hidden"
+        >
+          Day details · {fmtDate(date)}
+        </button>
+      )}
+      {date && sheetOpen && (
+        <div className="fixed inset-0 z-[1200] xl:hidden" role="dialog" aria-modal="true" aria-label={`Details for ${fmtDate(date)}`}>
+          <button type="button" aria-label="Close day details" tabIndex={-1} onClick={() => setSheetOpen(false)} className="absolute inset-0 bg-black/50" />
+          <div className="absolute inset-x-0 bottom-0 max-h-[82vh] animate-fade-in overflow-y-auto rounded-t-2xl border-t border-line-strong bg-ink-950 p-3 pb-6">
+            <div className="mb-2 flex justify-end">
+              <button type="button" onClick={() => setSheetOpen(false)} aria-label="Close day details" className="rounded-lg p-1.5 text-fg-muted hover:bg-ink-700 hover:text-fg">
+                <X className="size-4" aria-hidden="true" />
+              </button>
+            </div>
+            <DayDetail analysis={analysis} date={date} observations={areaObservations} onChangeDate={setSelectedDate} />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom'
 import { findNavItem } from '@/app/navigation'
 import { CsvImportModal } from '@/components/shared/CsvImportModal'
 import { cn } from '@/lib'
+import { useUrlSync } from '@/hooks/useUrlSync'
 import { Header } from './Header'
 import { MobileNav } from './MobileNav'
 import { Sidebar } from './Sidebar'
@@ -24,6 +25,7 @@ export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const { pathname } = useLocation()
   const fullBleed = FULL_BLEED.has(pathname)
+  useUrlSync()
 
   const closeMobile = useCallback(() => setMobileOpen(false), [])
 

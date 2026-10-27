@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink, useLocation } from 'react-router-dom'
 import { NAV_ITEMS } from '@/app/navigation'
 import { cn } from '@/lib'
 
@@ -10,13 +10,15 @@ interface NavListProps {
 }
 
 export function NavList({ collapsed = false, onNavigate }: NavListProps) {
+  // Carry ?date=…&area=… between pages so the shared selection survives navigation.
+  const { search } = useLocation()
   return (
     <nav aria-label="Primary">
       <ul className="flex flex-col gap-1">
         {NAV_ITEMS.map(({ path, label, icon: Icon }) => (
           <li key={path}>
             <NavLink
-              to={path}
+              to={{ pathname: path, search }}
               end={path === '/'}
               onClick={onNavigate}
               title={collapsed ? label : undefined}

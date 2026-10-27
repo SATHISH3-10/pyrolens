@@ -1,28 +1,108 @@
 import type { ActivityAnalysis, CriticalOutlook, DailyActivity, FireEvent } from '@/types/activity'
+import type { ThemeTokens } from '@/context/ThemeContext'
+import { calendarLegendRegistry } from '@/components/calendar/exportRegistry'
+import { paintCell } from '@/components/calendar/cellPainter'
 import { CLASS_LABEL } from './burningActivity'
-import { escapeCsv, triggerDownload } from './exportUtils'
+import type { SensorView } from './calendarLayout'
+import { csvPreamble, escapeCsv, geojsonMetadata, triggerDownload, type ExportMeta } from './exportUtils'
+
+export type { ExportMeta }
 
 const DISCLAIMER =
   'Active-fire hotspots are satellite thermal anomalies, not a complete record of fires. Pre-VIIRS values are modelled from MODIS. The BAI identifies unusual activity; it does not predict individual wildfires.'
 
-/** Save a canvas element (e.g. the calendar heatmap) as PNG on a solid background. */
-export function downloadCanvasPng(canvasId: string, fileName: string) {
-  const src = document.getElementById(canvasId) as HTMLCanvasElement | null
-  if (!src) return
+/**
+ * Composes the calendar's current view (all of its canvases), title, data source, legend and limitations into
+ * one PNG in the active theme. Returns the data URL (also used by the printable report).
+ */
+export function composeCalendarImage(opts: {
+  exportId: string
+  tokens: ThemeTokens
+  title: string
+  subtitle: string
+}): string | null {
+  const canvases = [...document.querySelectorAll<HTMLCanvasElement>(`canvas[id^="${opts.exportId}-"]`)]
+  if (canvases.length === 0) return null
+  const legend = calendarLegendRegistry.get(opts.exportId)
+  const t = opts.tokens
+  const dpr = window.devicePixelRatio || 1
+  const pad = 24
+  const cssW = Math.max(...canvases.map((c) => c.width / dpr)) + pad * 2
+  const blocksH = canvases.reduce((s, c) => s + c.height / dpr + 16, 0)
+  const legendRows = legend ? 1 + Math.ceil(legend.marks.length / 2) : 0
+  const footer = [
+    'BAI = 100·(0.4·Ĥ + 0.4·F̂ + 0.2·Ĉ) of log-scaled harmonized count, FRP and clusters; classes are percentiles of active days.',
+    ...DISCLAIMER.split(/(?<=\.)\s+/),
+  ]
+  const cssH = pad + 46 + blocksH + legendRows * 22 + 12 + footer.length * 15 + pad
   const out = document.createElement('canvas')
-  out.width = src.width
-  out.height = src.height
+  out.width = Math.round(cssW * dpr)
+  out.height = Math.round(cssH * dpr)
   const ctx = out.getContext('2d')!
-  ctx.fillStyle = '#111419'
-  ctx.fillRect(0, 0, out.width, out.height)
-  ctx.drawImage(src, 0, 0)
+  ctx.scale(dpr, dpr)
+  ctx.fillStyle = t.surface
+  ctx.fillRect(0, 0, cssW, cssH)
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillStyle = t.text
+  ctx.font = '600 16px Inter, system-ui, sans-serif'
+  ctx.fillText(opts.title, pad, pad + 14)
+  ctx.fillStyle = t.textMuted
+  ctx.font = '400 12px Inter, system-ui, sans-serif'
+  ctx.fillText(opts.subtitle, pad, pad + 34)
+  let y = pad + 50
+  for (const c of canvases) {
+    const h = c.height / dpr
+    ctx.drawImage(c, pad, y, c.width / dpr, h)
+    y += h + 16
+  }
+  if (legend) {
+    const sw = 14
+    ctx.font = '600 11px Inter, system-ui, sans-serif'
+    ctx.fillStyle = t.textMuted
+    ctx.fillText(legend.scaleTitle, pad, y + 11)
+    let x = pad + ctx.measureText(legend.scaleTitle).width + 14
+    ctx.font = '400 11px Inter, system-ui, sans-serif'
+    for (const item of legend.scale) {
+      paintCell(ctx, t, x, y, sw, sw, item.paint)
+      ctx.fillStyle = t.text
+      ctx.fillText(item.label, x + sw + 5, y + 11)
+      x += sw + 12 + ctx.measureText(item.label).width
+    }
+    y += 22
+    legend.marks.forEach((m, i) => {
+      const col = i % 2
+      const mx = pad + col * ((cssW - pad * 2) / 2)
+      const my = y + Math.floor(i / 2) * 22
+      paintCell(ctx, t, mx, my, sw, sw, m.paint)
+      ctx.fillStyle = t.text
+      ctx.fillText(`${m.label} — ${m.note}`, mx + sw + 6, my + 11)
+    })
+    y += Math.ceil(legend.marks.length / 2) * 22
+  }
+  ctx.fillStyle = t.textFaint
+  ctx.font = '400 10.5px Inter, system-ui, sans-serif'
+  footer.forEach((line, i) => ctx.fillText(line, pad, y + 16 + i * 15))
+  return out.toDataURL('image/png')
+}
+
+export function exportCalendarImage(opts: {
+  exportId: string
+  tokens: ThemeTokens
+  sensorView: SensorView
+  title: string
+  subtitle: string
+  fileName: string
+}) {
+  const url = composeCalendarImage(opts)
+  if (!url) return
   const a = document.createElement('a')
-  a.href = out.toDataURL('image/png')
-  a.download = fileName
+  a.href = url
+  a.download = opts.fileName
   a.click()
 }
 
-export function exportDailyBaiCsv(days: readonly DailyActivity[], areaName: string, fileName = 'pyrolens_daily_bai.csv') {
+export function exportDailyBaiCsv(days: readonly DailyActivity[], meta: ExportMeta, fileName = 'pyrolens_daily_bai.csv') {
+  const areaName = meta.area
   const header = [
     'date',
     'area',
@@ -87,10 +167,57 @@ export function exportDailyBaiCsv(days: readonly DailyActivity[], areaName: stri
       .map(escapeCsv)
       .join(','),
   )
-  triggerDownload([header.join(','), ...rows].join('\n'), fileName, 'text/csv;charset=utf-8;')
+  triggerDownload(csvPreamble(meta) + [header.join(','), ...rows].join('\n'), fileName, 'text/csv;charset=utf-8;')
 }
 
-export function exportFireEventsGeoJson(events: readonly FireEvent[], fileName = 'pyrolens_fire_clusters.geojson') {
+/** Side-by-side MODIS raw, VIIRS raw and harmonized daily values, with the factor used for scaled days. */
+export function exportComparisonCsv(days: readonly DailyActivity[], analysis: ActivityAnalysis, meta: ExportMeta, fileName = 'pyrolens_sensor_comparison.csv') {
+  const header = [
+    'date',
+    'modis_raw',
+    'modis_satellites',
+    'modis_per_satellite',
+    'viirs_raw',
+    'viirs_satellites',
+    'viirs_per_satellite',
+    'harmonized_per_satellite',
+    'harmonized_low',
+    'harmonized_high',
+    'source',
+    'r_m_used',
+    'r_m_q25',
+    'r_m_q75',
+  ]
+  const rows = days.map((d) => {
+    const f = analysis.model.factors[d.month - 1]!
+    const scaled = d.source === 'modis_scaled'
+    return [
+      d.date,
+      d.modisCount,
+      d.modisSats,
+      d.modisSats > 0 ? (d.modisCount / d.modisSats).toFixed(3) : '',
+      d.viirsCount,
+      d.viirsSats,
+      d.viirsSats > 0 ? (d.viirsCount / d.viirsSats).toFixed(3) : '',
+      d.source === 'none' ? '' : d.harmonizedCount.toFixed(3),
+      d.source === 'none' ? '' : d.harmonizedCountLow.toFixed(3),
+      d.source === 'none' ? '' : d.harmonizedCountHigh.toFixed(3),
+      d.source,
+      scaled ? f.countRatio.toFixed(4) : '',
+      scaled ? f.countQ25.toFixed(4) : '',
+      scaled ? f.countQ75.toFixed(4) : '',
+    ]
+      .map(escapeCsv)
+      .join(',')
+  })
+  triggerDownload(
+    csvPreamble(meta) + '# Empty values mean "no coverage" (unknown), never zero.\n' + [header.join(','), ...rows].join('\n'),
+    fileName,
+    'text/csv;charset=utf-8;',
+  )
+}
+
+export function exportFireEventsGeoJson(events: readonly FireEvent[], meta: ExportMeta, fileName = 'pyrolens_fire_clusters.geojson') {
   const features = events.map((e) => {
     const ring = e.hull.map(([lat, lng]) => [lng, lat])
     const geometry =
@@ -118,18 +245,18 @@ export function exportFireEventsGeoJson(events: readonly FireEvent[], fileName =
     }
   })
   triggerDownload(
-    JSON.stringify({ type: 'FeatureCollection', features }, null, 2),
+    JSON.stringify({ type: 'FeatureCollection', metadata: { generatedAt: new Date().toISOString(), ...geojsonMetadata(meta) }, features }, null, 2),
     fileName,
     'application/geo+json;charset=utf-8;',
   )
 }
 
-export function exportHarmonizationCsv(analysis: ActivityAnalysis, fileName = 'pyrolens_harmonization_factors.csv') {
+export function exportHarmonizationCsv(analysis: ActivityAnalysis, meta: ExportMeta, fileName = 'pyrolens_harmonization_factors.csv') {
   const header = 'month,count_ratio_r,count_ratio_q25,count_ratio_q75,frp_ratio,cluster_ratio,overlap_years,fallback_to_pooled'
   const rows = analysis.model.factors.map((f) =>
     [f.month, f.countRatio.toFixed(4), f.countQ25.toFixed(4), f.countQ75.toFixed(4), f.frpRatio.toFixed(4), f.clusterRatio.toFixed(4), f.samples, f.fallback].join(','),
   )
-  triggerDownload([header, ...rows].join('\n'), fileName, 'text/csv;charset=utf-8;')
+  triggerDownload(csvPreamble(meta) + [header, ...rows].join('\n'), fileName, 'text/csv;charset=utf-8;')
 }
 
 interface SummaryInput {
@@ -233,22 +360,11 @@ export function exportSummaryMarkdown(input: SummaryInput, fileName = 'pyrolens_
 }
 
 /** Opens a print-ready HTML report in a new tab (use the browser's "Save as PDF"). */
-export function openPrintableReport(input: SummaryInput, calendarCanvasId?: string) {
+export function openPrintableReport(input: SummaryInput, calendarImage?: string | null) {
   const { analysis, areaName, start, end, outlook, isDemo } = input
   const s = rangeStats(input)
   const n = analysis.seasonNorms
-  let img = ''
-  const canvas = calendarCanvasId ? (document.getElementById(calendarCanvasId) as HTMLCanvasElement | null) : null
-  if (canvas) {
-    const out = document.createElement('canvas')
-    out.width = canvas.width
-    out.height = canvas.height
-    const ctx = out.getContext('2d')!
-    ctx.fillStyle = '#111419'
-    ctx.fillRect(0, 0, out.width, out.height)
-    ctx.drawImage(canvas, 0, 0)
-    img = `<img src="${out.toDataURL('image/png')}" alt="Burning activity calendar" style="width:100%;border-radius:8px"/>`
-  }
+  const img = calendarImage ? `<img src="${calendarImage}" alt="Burning activity calendar with legend" style="width:100%;border-radius:8px"/>` : ''
   const esc = (t: string) => t.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!)
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Burning Activity Report — ${esc(areaName)}</title>
 <style>

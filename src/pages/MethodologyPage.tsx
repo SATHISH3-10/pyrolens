@@ -74,7 +74,7 @@ export default function MethodologyPage() {
           <Section id="data" title="Data sources">
             <p>
               Active-fire detections come from NASA <strong className="text-fg">FIRMS</strong> (Fire Information for Resource Management System),
-              via archive CSV downloads or the Area API (<code className="rounded bg-ink-700 px-1 font-mono text-xs text-fg">/api/area/csv/MAP_KEY/SOURCE/west,south,east,north/days</code>).
+              via archive CSV downloads or the Area API (<code className="break-all rounded bg-ink-700 px-1 font-mono text-xs text-fg">/api/area/csv/MAP_KEY/SOURCE/west,south,east,north/days</code>).
               For each detection PyroLens keeps latitude, longitude, acquisition date and time, satellite, sensor, confidence, brightness temperature, Fire Radiative Power (FRP) and the day/night flag.
             </p>
             <div className="overflow-x-auto rounded-xl border border-line">

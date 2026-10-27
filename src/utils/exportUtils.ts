@@ -37,12 +37,62 @@ export function triggerDownload(content: string, fileName: string, mimeType: str
   URL.revokeObjectURL(url)
 }
 
+/** Context written into every export: area, date range, data source and the synthetic-data flag. */
+export interface ExportMeta {
+  area: string
+  start: string
+  end: string
+  source: string
+  isDemo: boolean
+}
+
+export const EXPORT_DEFINITIONS = [
+  'Hotspot = satellite-detected thermal anomaly (MODIS 1 km, VIIRS 375 m); not necessarily a confirmed wildfire.',
+  'Harmonized count = VIIRS detections per satellite; before VIIRS, MODIS per satellite x monthly factor r(m) (modelled).',
+  'BAI = 100*(0.4*H + 0.4*F + 0.2*C) of log-scaled harmonized count, FRP and cluster count; classes are percentiles of active days.',
+]
+
+export const EXPORT_LIMITATIONS = [
+  'Zero detections do not prove no fire: clouds, smoke and overpass timing hide fires.',
+  'Pre-VIIRS values rely on the MODIS-to-VIIRS harmonization and carry wider uncertainty.',
+  'Agricultural, prescribed and industrial burning also appear as hotspots. Not for life-safety decisions.',
+]
+
+export function metaLines(meta: ExportMeta): string[] {
+  return [
+    `PyroLens export generated ${new Date().toISOString()}`,
+    `Area: ${meta.area}`,
+    `Date range: ${meta.start} to ${meta.end}`,
+    `Data source: ${meta.isDemo ? 'SYNTHETIC DEMO DATA — not NASA observations' : meta.source}`,
+    ...EXPORT_DEFINITIONS.map((d) => `Definition: ${d}`),
+    ...EXPORT_LIMITATIONS.map((l) => `Limitation: ${l}`),
+  ]
+}
+
+/** CSV preamble as '#'-comment lines (most CSV readers can skip comment lines). */
+export function csvPreamble(meta: ExportMeta | undefined): string {
+  return meta ? metaLines(meta).map((l) => `# ${l.replace(/\n/g, ' ')}`).join('\n') + '\n' : ''
+}
+
+export function geojsonMetadata(meta: ExportMeta | undefined) {
+  if (!meta) return {}
+  return {
+    area: meta.area,
+    dateRange: { start: meta.start, end: meta.end },
+    dataSource: meta.isDemo ? 'SYNTHETIC DEMO DATA — not NASA observations' : meta.source,
+    synthetic: meta.isDemo,
+    definitions: EXPORT_DEFINITIONS,
+    limitations: EXPORT_LIMITATIONS,
+  }
+}
+
 /**
  * Exports filtered observation records as CSV.
  */
 export function exportObservationsCsv(
   records: readonly FireObservation[],
   fileName = 'pyrolens_observations.csv',
+  meta?: ExportMeta,
 ) {
   const headers = [
     'Observation_ID',
@@ -74,9 +124,11 @@ export function exportObservationsCsv(
     escapeCsv(obs.provenance),
   ])
 
-  const csvContent =
-    '# DEMO DATA NOTICE: Synthetic demonstration data. Not official NASA observations.\n' +
-    [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
+  // The notice reflects the actual data provenance instead of always claiming demo data.
+  const provenanceNote = records.some((o) => o.provenance === 'synthetic-demo')
+    ? '# DEMO DATA NOTICE: Synthetic demonstration data. Not official NASA observations.\n'
+    : '# Source: NASA FIRMS active-fire detections.\n'
+  const csvContent = (meta ? csvPreamble(meta) : provenanceNote) + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
 
   triggerDownload(csvContent, fileName, 'text/csv;charset=utf-8;')
 }
@@ -123,6 +175,7 @@ export function exportAggregatedDailyCsv(
 export function exportObservationsGeoJson(
   records: readonly FireObservation[],
   fileName = 'pyrolens_observations.geojson',
+  meta?: ExportMeta,
 ) {
   // Cap at 15,000 to prevent browser string freeze
   const exportSet = records.slice(0, 15000)
@@ -135,6 +188,7 @@ export function exportObservationsGeoJson(
       disclaimer: 'Hotspots represent satellite thermal anomalies, not confirmed fire perimeters or burned area.',
       totalExported: exportSet.length,
       totalMatching: records.length,
+      ...geojsonMetadata(meta),
     },
     features: exportSet.map((obs) => ({
       type: 'Feature',

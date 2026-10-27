@@ -25,7 +25,7 @@ import { exportHarmonizationCsv } from '@/utils/exportActivity'
 import { fmtCompact, fmtDate, fmtNum, monthName } from '@/lib'
 
 export default function HarmonizationPage() {
-  const { analysis, area } = useFireData()
+  const { analysis, area, customAoi, metadata } = useFireData()
   const { tokens } = useTheme()
   const cs = chartStyles(tokens)
 
@@ -79,7 +79,19 @@ export default function HarmonizationPage() {
           </>
         }
         actions={
-          <Button variant="secondary" size="sm" onClick={() => exportHarmonizationCsv(analysis, `pyrolens_harmonization_${area.id}.csv`)}>
+          <Button variant="secondary" size="sm" onClick={() =>
+              exportHarmonizationCsv(
+                analysis,
+                {
+                  area: customAoi ? `${area.name} — AOI ${customAoi.name}` : area.name,
+                  start: analysis.firstDate,
+                  end: analysis.lastDate,
+                  source: metadata.title,
+                  isDemo: metadata.isSynthetic,
+                },
+                `pyrolens_harmonization_${area.id}.csv`,
+              )
+            }>
             <Download className="size-3.5" aria-hidden="true" /> Factors CSV
           </Button>
         }
