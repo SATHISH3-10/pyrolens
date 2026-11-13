@@ -89,3 +89,4 @@ if "acq_date" in combined.columns:
 combined.to_csv(OUTPUT_FILE, index=False)
 file_size_kb = os.path.getsize(OUTPUT_FILE) / 1024
 print(f"Successfully saved {len(combined)} active fire hotspots to {OUTPUT_FILE} ({file_size_kb:.1f} KB)")
+
