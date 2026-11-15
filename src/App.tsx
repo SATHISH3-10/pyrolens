@@ -6,6 +6,7 @@ const DashboardPage = lazy(() => import('@/pages/DashboardPage'))
 const FireMapPage = lazy(() => import('@/pages/FireMapPage'))
 const CalendarPage = lazy(() => import('@/pages/CalendarPage'))
 const HarmonizationPage = lazy(() => import('@/pages/HarmonizationPage'))
+const PredictionPage = lazy(() => import('@/pages/PredictionPage'))
 const ReportsPage = lazy(() => import('@/pages/ReportsPage'))
 const MethodologyPage = lazy(() => import('@/pages/MethodologyPage'))
 const NotFoundPage = lazy(() => import('@/pages/NotFoundPage'))
@@ -29,6 +30,7 @@ export default function App() {
         <Route path="map" element={page(<FireMapPage />)} />
         <Route path="calendar" element={page(<CalendarPage />)} />
         <Route path="harmonization" element={page(<HarmonizationPage />)} />
+        <Route path="prediction" element={page(<PredictionPage />)} />
         <Route path="reports" element={page(<ReportsPage />)} />
         <Route path="methodology" element={page(<MethodologyPage />)} />
         <Route path="explorer" element={<Navigate to="/map" replace />} />

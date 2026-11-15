@@ -14,6 +14,8 @@ import type {
   SummaryMetrics,
 } from '@/types/fire'
 import type { ActivityAnalysis, BaiWeights } from '@/types/activity'
+import type { CreatePredictionOptions, FirePrediction } from '@/types/prediction'
+import { generateFirePrediction, evaluatePrediction as evaluatePredictionEngine } from '@/utils/predictionEngine'
 import { parseFirmsCsv } from '@/data/firmsCsvImporter'
 import { generateAreaArchive } from '@/data/demoArchive'
 import { DEFAULT_STUDY_AREA_ID, getStudyArea, type StudyArea } from '@/data/studyAreas'
@@ -70,6 +72,15 @@ interface FireDataContextValue {
   ) => { success: boolean; message: string; warnings?: string[] }
   isCsvModalOpen: boolean
   setIsCsvModalOpen: (open: boolean) => void
+  predictions: FirePrediction[]
+  activePrediction: FirePrediction | undefined
+  activePredictionId: string | null
+  setActivePredictionId: (id: string | null) => void
+  createPrediction: (options: CreatePredictionOptions) => FirePrediction
+  evaluatePredictionRecord: (predictionId: string, customObserved?: FireObservation[]) => FirePrediction | null
+  deletePrediction: (id: string) => void
+  exportPredictionsJson: () => string
+  importPredictionsJson: (jsonStr: string) => { success: boolean; count: number; error?: string }
 }
 
 const FireDataContext = createContext<FireDataContextValue | null>(null)
@@ -182,6 +193,29 @@ function readUrlSelection(): { areaId: string; date: string | null } {
 const urlSelection = readUrlSelection()
 const initial = loadPreset(urlSelection.areaId)
 
+const PREDICTIONS_STORAGE_KEY = 'pyrolens_predictions_v1'
+
+function loadStoredPredictions(): FirePrediction[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(PREDICTIONS_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function saveStoredPredictions(predictions: FirePrediction[]): void {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(PREDICTIONS_STORAGE_KEY, JSON.stringify(predictions))
+  } catch (e) {
+    console.warn('Failed to save predictions to localStorage', e)
+  }
+}
+
 export function FireDataProvider({ children }: { children: ReactNode }) {
   const [observations, setObservations] = useState<FireObservation[]>(initial.data)
   const [metadata, setMetadata] = useState<DatasetMeta>(initial.meta)
@@ -193,6 +227,8 @@ export function FireDataProvider({ children }: { children: ReactNode }) {
   const [customAoi, setCustomAoiState] = useState<CustomAoi | null>(null)
   const [baiWeights, setBaiWeights] = useState<BaiWeights>(DEFAULT_BAI_WEIGHTS)
   const [filter, setFilterState] = useState<ObservationFilter>(defaultFilter(initial.meta))
+  const [predictions, setPredictions] = useState<FirePrediction[]>(loadStoredPredictions)
+  const [activePredictionId, setActivePredictionId] = useState<string | null>(null)
 
   const setFilter = useCallback((patch: Partial<ObservationFilter>) => {
     setFilterState((prev) => ({ ...prev, ...patch }))
@@ -322,6 +358,89 @@ export function FireDataProvider({ children }: { children: ReactNode }) {
     return observations.find((o) => o.id === selectedObservationId)
   }, [observations, selectedObservationId])
 
+  const activePrediction = useMemo(
+    () => predictions.find((p) => p.id === activePredictionId),
+    [predictions, activePredictionId],
+  )
+
+  const createPrediction = useCallback(
+    (options: CreatePredictionOptions): FirePrediction => {
+      const pred = generateFirePrediction(observations, options)
+      setPredictions((prev) => {
+        const next = [pred, ...prev]
+        saveStoredPredictions(next)
+        return next
+      })
+      setActivePredictionId(pred.id)
+      return pred
+    },
+    [observations],
+  )
+
+  const evaluatePredictionRecord = useCallback(
+    (predictionId: string, customObserved?: FireObservation[]): FirePrediction | null => {
+      let evaluatedPred: FirePrediction | null = null
+      setPredictions((prev) => {
+        const target = prev.find((p) => p.id === predictionId)
+        if (!target) return prev
+        const obs = customObserved ?? observations
+        evaluatedPred = evaluatePredictionEngine(target, obs)
+        const next = prev.map((p) => (p.id === predictionId ? evaluatedPred! : p))
+        saveStoredPredictions(next)
+        return next
+      })
+      return evaluatedPred
+    },
+    [observations],
+  )
+
+  const deletePrediction = useCallback((id: string) => {
+    setPredictions((prev) => {
+      const next = prev.filter((p) => p.id !== id)
+      saveStoredPredictions(next)
+      return next
+    })
+    setActivePredictionId((prev) => (prev === id ? null : prev))
+  }, [])
+
+  const exportPredictionsJson = useCallback((): string => {
+    return JSON.stringify(predictions, null, 2)
+  }, [predictions])
+
+  const importPredictionsJson = useCallback(
+    (jsonStr: string): { success: boolean; count: number; error?: string } => {
+      try {
+        const parsed = JSON.parse(jsonStr)
+        if (!Array.isArray(parsed)) {
+          return { success: false, count: 0, error: 'JSON content is not an array of predictions' }
+        }
+        const validPredictions: FirePrediction[] = []
+        for (const item of parsed) {
+          if (item && typeof item === 'object' && item.id && item.targetDate && item.predictedCells) {
+            validPredictions.push(item as FirePrediction)
+          }
+        }
+        if (validPredictions.length === 0) {
+          return { success: false, count: 0, error: 'No valid predictions found in the file' }
+        }
+        setPredictions((prev) => {
+          const map = new Map<string, FirePrediction>()
+          for (const p of validPredictions) map.set(p.id, p)
+          for (const p of prev) {
+            if (!map.has(p.id)) map.set(p.id, p)
+          }
+          const next = Array.from(map.values())
+          saveStoredPredictions(next)
+          return next
+        })
+        return { success: true, count: validPredictions.length }
+      } catch (err) {
+        return { success: false, count: 0, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+    [],
+  )
+
   const value = useMemo<FireDataContextValue>(
     () => ({
       observations,
@@ -352,6 +471,15 @@ export function FireDataProvider({ children }: { children: ReactNode }) {
       importCsvContent,
       isCsvModalOpen,
       setIsCsvModalOpen,
+      predictions,
+      activePrediction,
+      activePredictionId,
+      setActivePredictionId,
+      createPrediction,
+      evaluatePredictionRecord,
+      deletePrediction,
+      exportPredictionsJson,
+      importPredictionsJson,
     }),
     [
       observations,
@@ -376,6 +504,14 @@ export function FireDataProvider({ children }: { children: ReactNode }) {
       loadSyntheticData,
       importCsvContent,
       isCsvModalOpen,
+      predictions,
+      activePrediction,
+      activePredictionId,
+      createPrediction,
+      evaluatePredictionRecord,
+      deletePrediction,
+      exportPredictionsJson,
+      importPredictionsJson,
     ],
   )
 

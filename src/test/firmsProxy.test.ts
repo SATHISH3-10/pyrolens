@@ -164,4 +164,41 @@ describe('14. Server-Side NASA FIRMS Proxy (api/firms/live)', () => {
     expect(res.body).toBe(mockCsv)
     expect(res.body).not.toContain(process.env.NASA_FIRMS_MAP_KEY)
   })
+
+  it('rejects invalid date parameter with 400', async () => {
+    process.env.NASA_FIRMS_MAP_KEY = 'valid_mock_key_11111111111111111'
+    const req = {
+      url: '/api/firms/live?source=MODIS_NRT&days=1&area=68,8,97,37&date=invalid-date',
+      headers: {},
+    } as any
+
+    const res = createMockResponse()
+    await handler(req, res as any)
+
+    expect(res.statusCode).toBe(400)
+    const json = JSON.parse(res.body)
+    expect(json.error).toContain('Invalid date parameter')
+  })
+
+  it('appends date parameter to upstream NASA URL when provided', async () => {
+    process.env.NASA_FIRMS_MAP_KEY = 'valid_mock_key_11111111111111111'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => 'mock,header\n1,2',
+    } as any)
+
+    const req = {
+      url: '/api/firms/live?source=VIIRS_SNPP_NRT&days=1&area=68,8,97,37&date=2026-11-20',
+      headers: {},
+    } as any
+
+    const res = createMockResponse()
+    await handler(req, res as any)
+
+    expect(res.statusCode).toBe(200)
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/VIIRS_SNPP_NRT/68,8,97,37/1/2026-11-20'),
+    )
+  })
 })

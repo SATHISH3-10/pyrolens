@@ -5,6 +5,7 @@ import {
   GitCompareArrows,
   LayoutDashboard,
   Map,
+  Target,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -45,6 +46,13 @@ export const NAV_ITEMS: readonly NavItem[] = [
     title: 'Sensor Harmonization',
     description: 'How MODIS and VIIRS are put on one comparable scale.',
     icon: GitCompareArrows,
+  },
+  {
+    path: '/prediction',
+    label: 'Prediction & Verification',
+    title: 'Prediction & Verification',
+    description: 'Seasonal fire likelihood predictions compared with observed NASA FIRMS detections.',
+    icon: Target,
   },
   {
     path: '/reports',

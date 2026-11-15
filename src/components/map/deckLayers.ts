@@ -3,7 +3,9 @@ import { HeatmapLayer } from '@deck.gl/aggregation-layers'
 import type { Layer, PickingInfo } from '@deck.gl/core'
 import type { FireObservation } from '@/types/fire'
 import type { FireEvent } from '@/types/activity'
+import type { FirePrediction, PredictedCell } from '@/types/prediction'
 import type { ThemeTokens } from '@/context/ThemeContext'
+import { getGridCellKey } from '@/utils/aggregation'
 import { AGE_BUCKETS, ageBucket, confidenceLevel, detectionAgeHours, frpClass } from '@/utils/mapFilters'
 import { toRGBA, withAlpha, type RGBA } from './colorUtils'
 import { hotspotRadius } from './hotspotStyle'
@@ -153,5 +155,124 @@ export function buildDeckLayers(o: DeckLayerOptions): Layer[] {
       }),
     )
   }
+  return layers
+}
+
+function cellPolygon(cell: PredictedCell): Array<[number, number]> {
+  const [minLng, minLat, maxLng, maxLat] = cell.bounds
+  return [
+    [minLng, minLat],
+    [maxLng, minLat],
+    [maxLng, maxLat],
+    [minLng, maxLat],
+    [minLng, minLat],
+  ]
+}
+
+export interface PredictionDeckLayerOptions {
+  prediction: FirePrediction | null
+  observedHotspots?: FireObservation[]
+  showPredictedCells?: boolean
+  showHits?: boolean
+  showObserved?: boolean
+  selectedCellId?: string | null
+  onCellClick?: (cell: PredictedCell, info: PickingInfo) => void
+  onHotspotClick?: (obs: FireObservation, info: PickingInfo) => void
+}
+
+/**
+ * Builds deck.gl layers for Fire Likelihood Prediction and Prediction-vs-Observation verification.
+ * Layer hierarchy:
+ * 1. Bottom: Predicted high-risk grid cells (semi-transparent amber/red PolygonLayer)
+ * 2. Middle: Correctly predicted cells / hits (emerald green outline 2.5px width)
+ * 3. Top: Observed live hotspots (ScatterplotLayer with bright orange circles)
+ */
+export function buildPredictionDeckLayers(o: PredictionDeckLayerOptions): Layer[] {
+  if (!o.prediction) return []
+  const layers: Layer[] = []
+  const { prediction, observedHotspots = [] } = o
+
+  // Identify observed cell IDs
+  const observedCellIds = new Set<string>()
+  for (const obs of observedHotspots) {
+    observedCellIds.add(getGridCellKey(obs.latitude, obs.longitude, prediction.gridResolution))
+  }
+
+  // 1. Predicted high-risk grid cells: semi-transparent amber/red PolygonLayer
+  if (o.showPredictedCells !== false && prediction.predictedCells.length > 0) {
+    layers.push(
+      new PolygonLayer<PredictedCell>({
+        id: 'predicted-cells',
+        data: prediction.predictedCells,
+        getPolygon: cellPolygon,
+        filled: true,
+        stroked: true,
+        lineWidthUnits: 'pixels',
+        getFillColor: (c) => {
+          if (!c.predictedActive) return [148, 163, 184, 18]
+          const alpha = Math.min(210, Math.max(70, Math.round(c.historicalRecurrenceRate * 255)))
+          return [249, 115, 22, alpha]
+        },
+        getLineColor: (c) => {
+          if (c.cellId === o.selectedCellId) return [255, 255, 255, 255]
+          if (!c.predictedActive) return [148, 163, 184, 40]
+          return [234, 88, 12, 190]
+        },
+        getLineWidth: (c) => (c.cellId === o.selectedCellId ? 2.5 : c.predictedActive ? 1.5 : 0.5),
+        pickable: true,
+        onClick: (info) => info.object && o.onCellClick && o.onCellClick(info.object, info),
+        updateTriggers: {
+          getLineColor: [o.selectedCellId],
+          getLineWidth: [o.selectedCellId],
+        },
+      }),
+    )
+  }
+
+  // 2. Correctly predicted cells (hits): emerald green outline (2.5px width)
+  if (o.showHits !== false && observedCellIds.size > 0) {
+    const hits = prediction.predictedCells.filter(
+      (c) => c.predictedActive && observedCellIds.has(c.cellId),
+    )
+    if (hits.length > 0) {
+      layers.push(
+        new PolygonLayer<PredictedCell>({
+          id: 'prediction-hits',
+          data: hits,
+          getPolygon: cellPolygon,
+          filled: true,
+          stroked: true,
+          lineWidthUnits: 'pixels',
+          getFillColor: [34, 197, 94, 45],
+          getLineColor: [34, 197, 94, 255],
+          getLineWidth: 2.5,
+          pickable: true,
+          onClick: (info) => info.object && o.onCellClick && o.onCellClick(info.object, info),
+        }),
+      )
+    }
+  }
+
+  // 3. Observed live hotspots: ScatterplotLayer with bright orange circles
+  if (o.showObserved !== false && observedHotspots.length > 0) {
+    layers.push(
+      new ScatterplotLayer<FireObservation>({
+        id: 'observed-live-hotspots',
+        data: observedHotspots,
+        getPosition: (d) => [d.longitude, d.latitude],
+        radiusUnits: 'pixels',
+        getRadius: 5,
+        filled: true,
+        stroked: true,
+        lineWidthUnits: 'pixels',
+        getFillColor: [255, 107, 0, 230],
+        getLineColor: [255, 255, 255, 230],
+        getLineWidth: 1.5,
+        pickable: true,
+        onClick: (info) => info.object && o.onHotspotClick && o.onHotspotClick(info.object, info),
+      }),
+    )
+  }
+
   return layers
 }

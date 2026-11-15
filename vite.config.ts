@@ -14,6 +14,7 @@ function firmsBackendProxy(serverEnvKey?: string): Plugin {
       const source = urlObj.searchParams.get('source') || 'VIIRS_SNPP_NRT'
       const daysStr = urlObj.searchParams.get('days') || '3'
       const area = urlObj.searchParams.get('area') || '68,8,97,37'
+      const date = urlObj.searchParams.get('date')
 
       // Check for client-provided key in header, or fallback to server env
       const headerKey = req.headers['x-firms-map-key']
@@ -108,7 +109,20 @@ function firmsBackendProxy(serverEnvKey?: string): Plugin {
         return
       }
 
-      const upstreamUrl = `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${activeKey}/${source}/${area}/${days}`
+      if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        res.statusCode = 400
+        res.setHeader('Content-Type', 'application/json')
+        res.end(
+          JSON.stringify({
+            error: 'Invalid date parameter. Expected YYYY-MM-DD format.',
+          }),
+        )
+        return
+      }
+
+      const upstreamUrl = date
+        ? `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${activeKey}/${source}/${area}/${days}/${date}`
+        : `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${activeKey}/${source}/${area}/${days}`
       const upstreamResp = await fetch(upstreamUrl)
 
       if (!upstreamResp.ok) {
